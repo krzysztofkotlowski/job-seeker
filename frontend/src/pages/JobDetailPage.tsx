@@ -148,9 +148,28 @@ export function JobDetailPage() {
       <Box sx={{ p: 3, display: "flex", flexDirection: "column", gap: 3 }}>
         {/* Reposted info */}
         {job.is_reposted && job.original_job_id && (
-          <Alert severity="warning">
+          <Alert severity="warning" sx={{ mb: 1.5 }}>
             This is a reposted offer.{" "}
             <Link to={`/jobs/${job.original_job_id}`} style={{ fontWeight: 600 }}>View original posting</Link>
+          </Alert>
+        )}
+
+        {/* Cross-source listings */}
+        {job.alternate_listings && job.alternate_listings.length > 0 && (
+          <Alert severity="info" sx={{ mb: 1.5 }}>
+            Also listed on:&nbsp;
+            {job.alternate_listings.map((alt, idx) => (
+              <Button
+                key={alt.id}
+                size="small"
+                href={alt.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                sx={{ ml: idx === 0 ? 0 : 1 }}
+              >
+                {alt.source}
+              </Button>
+            ))}
           </Alert>
         )}
 

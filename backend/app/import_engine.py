@@ -1,7 +1,6 @@
 """Background import engine with persistent progress stored in PostgreSQL."""
 
 import logging
-import threading
 import time
 import uuid
 from datetime import date, datetime, timezone
@@ -46,9 +45,6 @@ def recover_interrupted_imports():
         log.warning("Failed to recover imports: %s", e)
     finally:
         db.close()
-
-_thread_lock = threading.Lock()
-_threads: dict[str, threading.Thread] = {}
 
 
 def _now() -> datetime:
@@ -127,14 +123,34 @@ def get_all_status() -> list[dict]:
 
 
 def is_running() -> bool:
-    with _thread_lock:
-        return any(t.is_alive() for t in _threads.values())
+    """Return True if any import task is in a running state."""
+    db = SessionLocal()
+    try:
+        return (
+            db.query(ImportTaskRow)
+            .filter(ImportTaskRow.status.in_(["collecting", "running"]))
+            .first()
+            is not None
+        )
+    finally:
+        db.close()
 
 
 def is_source_running(source: str) -> bool:
-    with _thread_lock:
-        t = _threads.get(source)
-        return t is not None and t.is_alive()
+    """Return True if the given source has a running task."""
+    db = SessionLocal()
+    try:
+        row = (
+            db.query(ImportTaskRow)
+            .filter(
+                ImportTaskRow.source == source,
+                ImportTaskRow.status.in_(["collecting", "running"]),
+            )
+            .first()
+        )
+        return row is not None
+    finally:
+        db.close()
 
 
 def cancel_all():
@@ -149,36 +165,6 @@ def cancel_all():
     finally:
         db.close()
     log.info("Import cancellation requested")
-
-
-def start_all():
-    with _thread_lock:
-        alive = {s: t for s, t in _threads.items() if t.is_alive()}
-        if alive:
-            log.warning("Already running: %s", list(alive.keys()))
-            return
-
-    for source in SOURCES:
-        _prepare_source(source)
-
-    t_jj = threading.Thread(target=_run_justjoin, daemon=True, name="import-jj")
-    t_nf = threading.Thread(target=_run_nofluffjobs, daemon=True, name="import-nf")
-
-    with _thread_lock:
-        _threads["justjoin.it"] = t_jj
-        _threads["nofluffjobs.com"] = t_nf
-
-    t_jj.start()
-    t_nf.start()
-
-
-def start_source(source: str):
-    _prepare_source(source)
-    target = _run_justjoin if source == "justjoin.it" else _run_nofluffjobs
-    t = threading.Thread(target=target, daemon=True, name=f"import-{source}")
-    with _thread_lock:
-        _threads[source] = t
-    t.start()
 
 
 def _prepare_source(source: str):

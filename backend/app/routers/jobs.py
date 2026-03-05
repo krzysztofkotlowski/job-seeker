@@ -8,6 +8,7 @@ from sqlalchemy import func, or_, cast, Numeric, and_, tuple_
 from sqlalchemy.orm import Session
 
 from app.database import get_db
+from app.errors import api_error
 from app.models.tables import JobRow, DetectedSkillRow
 from app.parsers.base import format_category
 
@@ -63,24 +64,31 @@ def _attach_detected_skills(items: list[dict], db: Session) -> None:
 @router.post("/parse")
 def parse_url(req: ParseRequest):
     if not is_supported_url(req.url):
-        raise HTTPException(400, "Unsupported URL. Supported: justjoin.it, nofluffjobs.com")
+        raise api_error(
+            "UNSUPPORTED_URL",
+            "Unsupported URL. Supported: justjoin.it, nofluffjobs.com",
+            status_code=400,
+        )
     try:
         parsed = detect_and_parse(req.url)
         return parsed.model_dump()
     except Exception as e:
-        raise HTTPException(502, f"Failed to parse URL: {e}")
+        raise api_error(
+            "PARSE_FAILED",
+            "Failed to parse job listing from this URL.",
+            status_code=502,
+        )
 
 
 @router.post("", status_code=201)
 def create_job(job_data: JobCreate, db: Session = Depends(get_db)):
     existing = db.query(JobRow).filter(JobRow.url == job_data.url).first()
     if existing:
-        raise HTTPException(
-            409,
-            detail={
-                "message": "Job with this URL already exists",
-                "existing_id": str(existing.id),
-            },
+        raise api_error(
+            "JOB_ALREADY_EXISTS",
+            "Job with this URL already exists.",
+            status_code=409,
+            existing_id=str(existing.id),
         )
 
     row = _pydantic_to_row(job_data)
@@ -563,7 +571,23 @@ def get_job(job_id: str, db: Session = Depends(get_db)):
     row = db.query(JobRow).filter(JobRow.id == job_id).first()
     if not row:
         raise HTTPException(404, "Job not found")
-    return row.to_dict()
+    data = row.to_dict()
+
+    # Find other listings for the same role (same title + company) on different sources.
+    alt_rows = (
+        db.query(JobRow.id, JobRow.source, JobRow.url)
+        .filter(
+            func.lower(JobRow.title) == func.lower(row.title),
+            func.lower(JobRow.company) == func.lower(row.company),
+            JobRow.id != row.id,
+            JobRow.source != row.source,
+        )
+        .all()
+    )
+    data["alternate_listings"] = [
+        {"id": str(jid), "source": source, "url": url} for jid, source, url in alt_rows
+    ]
+    return data
 
 
 @router.patch("/{job_id}")

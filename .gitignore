@@ -2,31 +2,37 @@
 __pycache__/
 *.py[cod]
 *.egg-info/
+*.egg
 .venv/
 venv/
-*.egg
+.pytest_cache/
+.mypy_cache/
 
-# Node
+# Node / frontend
 node_modules/
 dist/
 .vite/
+.turbo/
+coverage/
 
-# IDE
+# IDE / OS
 .idea/
 .vscode/
 *.swp
 *.swo
 .DS_Store
 
-# Environment
+# Environment / secrets
 .env
 .env.local
+.env.*
 
-# Docker
+# Docker / DB
 pgdata/
 
-# Data
+# Data / backups
 *.json.bak
+*.sql
 
-# Cursor
+# Cursor project metadata
 .cursor/

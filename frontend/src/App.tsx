@@ -87,7 +87,7 @@ function App() {
               <Tab
                 label="API Docs"
                 component="a"
-                href="/api/docs"
+                href="/api/v1/docs"
                 target="_blank"
                 rel="noopener noreferrer"
                 sx={{ opacity: 0.7, "&:hover": { opacity: 1 } }}

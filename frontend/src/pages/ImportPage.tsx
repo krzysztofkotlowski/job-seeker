@@ -63,10 +63,23 @@ export function ImportPage() {
   const handleStartAll = async () => {
     setStarting(true);
     setError(null);
+    // Optimistically mark tasks as collecting so the user immediately sees progress starting.
+    setStatus((prev) =>
+      prev
+        ? {
+            ...prev,
+            running: true,
+            tasks: prev.tasks.map((t) =>
+              t.status === "idle" || t.status === "error" || t.status === "cancelled"
+                ? { ...t, status: "collecting" }
+                : t,
+            ),
+          }
+        : prev,
+    );
     try {
       await api.importStart();
       if (!intervalRef.current) intervalRef.current = setInterval(fetchStatus, 2000);
-      await fetchStatus();
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to start import");
     } finally {
@@ -76,10 +89,31 @@ export function ImportPage() {
 
   const handleStartSource = async (source: string) => {
     setError(null);
+    // Optimistically update this source's task so the button/label change immediately.
+    setStatus((prev) =>
+      prev
+        ? {
+            ...prev,
+            running: true,
+            tasks: prev.tasks.map((t) =>
+              t.source === source
+                ? {
+                    ...t,
+                    status:
+                      t.status === "done"
+                        ? "collecting" // re-import behaves like a fresh run
+                        : t.status === "idle" || t.status === "error" || t.status === "cancelled"
+                          ? "collecting"
+                          : t.status,
+                  }
+                : t,
+            ),
+          }
+        : prev,
+    );
     try {
       await api.importStartSource(source);
       if (!intervalRef.current) intervalRef.current = setInterval(fetchStatus, 2000);
-      await fetchStatus();
     } catch (e) {
       setError(e instanceof Error ? e.message : `Failed to start ${source} import`);
     }

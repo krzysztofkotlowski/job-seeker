@@ -15,6 +15,12 @@ export interface DetectedSkill {
 
 export type JobStatus = "new" | "seen" | "applied" | "interview" | "offer" | "rejected";
 
+export interface AlternateListing {
+  id: string;
+  source: string;
+  url: string;
+}
+
 export interface Job {
   id: string;
   url: string;
@@ -41,6 +47,7 @@ export interface Job {
   duplicate_count?: number;
   detected_skills?: string[];
   saved?: boolean;
+  alternate_listings?: AlternateListing[];
 }
 
 export interface PaginatedResponse<T> {

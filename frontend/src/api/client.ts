@@ -10,7 +10,7 @@ import type {
   AnalyticsData,
 } from "./types";
 
-const BASE = "/api";
+const BASE = "/api/v1";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, {
@@ -19,7 +19,12 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    throw new Error(body.detail?.message || body.detail || `HTTP ${res.status}`);
+    const err =
+      body?.error?.message ||
+      body?.detail?.message ||
+      body?.detail ||
+      `HTTP ${res.status}`;
+    throw new Error(err);
   }
   if (res.status === 204) return undefined as T;
   return res.json();

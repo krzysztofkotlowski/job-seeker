@@ -11,6 +11,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 
 from app.database import DATABASE_URL
+from app.errors import api_error
 
 log = logging.getLogger(__name__)
 router = APIRouter()
@@ -48,15 +49,20 @@ def create_backup():
     """
     url = DATABASE_URL or ""
     if "postgresql" not in url.split(":")[0]:
-        raise HTTPException(
+        raise api_error(
+            "BACKUP_UNSUPPORTED_DB",
+            "Backup is only supported for PostgreSQL. Set DATABASE_URL to a postgresql:// URL.",
             status_code=501,
-            detail="Backup is only supported for PostgreSQL. Set DATABASE_URL to a postgresql:// URL.",
         )
     try:
         conn = _parse_pg_url(url)
-    except Exception as e:
+    except Exception:
         log.exception("Failed to parse DATABASE_URL")
-        raise HTTPException(status_code=500, detail="Invalid DATABASE_URL for backup.") from e
+        raise api_error(
+            "BACKUP_INVALID_DATABASE_URL",
+            "Invalid DATABASE_URL for backup.",
+            status_code=500,
+        )
 
     cmd = [
         "pg_dump",
@@ -87,20 +93,30 @@ def create_backup():
             if os.path.exists(tmp):
                 os.unlink(tmp)
             log.warning("pg_dump failed: %s", err)
-            raise HTTPException(status_code=500, detail=f"Backup failed: {err}")
+            raise api_error(
+                "BACKUP_FAILED",
+                "Backup failed while running pg_dump.",
+                status_code=500,
+                stderr=err,
+            )
     except FileNotFoundError:
         if tmp and os.path.exists(tmp):
             os.unlink(tmp)
-        raise HTTPException(
+        raise api_error(
+            "BACKUP_PGDUMP_MISSING",
+            "pg_dump not found. Install PostgreSQL client tools and ensure pg_dump is on PATH.",
             status_code=503,
-            detail="pg_dump not found. Install PostgreSQL client tools and ensure pg_dump is on PATH.",
         )
     except HTTPException:
         raise
-    except Exception as e:
+    except Exception:
         if tmp and os.path.exists(tmp):
             os.unlink(tmp)
-        raise HTTPException(status_code=500, detail="Backup failed.") from e
+        raise api_error(
+            "BACKUP_FAILED",
+            "Backup failed.",
+            status_code=500,
+        )
 
     filename = f"jobseeker_backup_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.sql"
 
