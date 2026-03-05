@@ -8,15 +8,18 @@ import type {
   ImportStatus,
   DetectedSkill,
   AnalyticsData,
+  ResumeAnalyzeResult,
 } from "./types";
+import { getTokenForRequest } from "../auth/tokenProvider";
 
 const BASE = "/api/v1";
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const res = await fetch(`${BASE}${path}`, {
-    headers: { "Content-Type": "application/json" },
-    ...init,
-  });
+  const token = await getTokenForRequest();
+  const headers = new Headers(init?.headers);
+  if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  if (token) headers.set("Authorization", `Bearer ${token}`);
+  const res = await fetch(`${BASE}${path}`, { ...init, headers });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
     const err =
@@ -51,6 +54,7 @@ export const api = {
     category?: string;
     seniority?: string;
     skill?: string;
+    skills?: string;
     search?: string;
     is_reposted?: boolean;
     work_type?: string;
@@ -146,6 +150,7 @@ export const api = {
     source?: string;
     category?: string;
     skill?: string;
+    skills?: string;
     search?: string;
     is_reposted?: boolean;
     work_type?: string;
@@ -158,6 +163,7 @@ export const api = {
     if (params?.source) sp.set("source", params.source);
     if (params?.category) sp.set("category", params.category);
     if (params?.skill) sp.set("skill", params.skill);
+    if (params?.skills) sp.set("skills", params.skills);
     if (params?.search) sp.set("search", params.search);
     if (params?.is_reposted !== undefined) sp.set("is_reposted", String(params.is_reposted));
     if (params?.work_type) sp.set("work_type", params.work_type);
@@ -170,11 +176,58 @@ export const api = {
 
   /** Trigger DB backup; returns blob for download. */
   createBackup: async (): Promise<Blob> => {
-    const res = await fetch(`${BASE}/backup/create`, { method: "POST" });
+    const token = await getTokenForRequest();
+    const headers = new Headers();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    const res = await fetch(`${BASE}/backup/create`, { method: "POST", headers });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.detail || `Backup failed: ${res.status}`);
     }
     return res.blob();
+  },
+
+  /** Upload resume (PDF or JSON), extract keywords, return job matches. */
+  resumeAnalyze: async (file: File, signal?: AbortSignal): Promise<ResumeAnalyzeResult> => {
+    const token = await getTokenForRequest();
+    const form = new FormData();
+    form.append("file", file);
+    const headers = new Headers();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    const res = await fetch(`${BASE}/resume/analyze`, {
+      method: "POST",
+      body: form,
+      headers,
+      signal,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const msg = body?.detail || body?.error?.message || `Resume analyze failed: ${res.status}`;
+      throw new Error(Array.isArray(msg) ? msg[0]?.msg || String(msg) : msg);
+    }
+    return res.json();
+  },
+
+  /** Generate AI summary for resume analysis. Call after analyze. */
+  resumeSummarize: async (
+    data: { extracted_skills: string[]; matches: unknown[]; by_category: unknown[] },
+    signal?: AbortSignal,
+  ): Promise<{ summary: string }> => {
+    const token = await getTokenForRequest();
+    const headers = new Headers();
+    headers.set("Content-Type", "application/json");
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    const res = await fetch(`${BASE}/resume/summarize`, {
+      method: "POST",
+      body: JSON.stringify(data),
+      headers,
+      signal,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const msg = body?.detail || body?.error?.message || `Summary failed: ${res.status}`;
+      throw new Error(typeof msg === "string" ? msg : Array.isArray(msg) ? msg[0]?.msg || String(msg) : String(msg));
+    }
+    return res.json();
   },
 };

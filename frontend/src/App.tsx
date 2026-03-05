@@ -8,13 +8,15 @@ import Tab from "@mui/material/Tab";
 import Tabs from "@mui/material/Tabs";
 import Button from "@mui/material/Button";
 import WorkOutlineIcon from "@mui/icons-material/WorkOutline";
-import BackupIcon from "@mui/icons-material/Backup";
-import { api } from "./api/client";
+import LoginIcon from "@mui/icons-material/Login";
+import LogoutIcon from "@mui/icons-material/Logout";
+import { AuthProvider, useAuth } from "./auth/AuthContext";
 import { JobListPage } from "./pages/JobListPage";
 import { JobDetailPage } from "./pages/JobDetailPage";
 import { SkillsPage } from "./pages/SkillsPage";
 import { ImportPage } from "./pages/ImportPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { ResumeAnalysisPage } from "./pages/ResumeAnalysisPage";
 
 const theme = createTheme({
   palette: {
@@ -36,14 +38,14 @@ const NAV_ITEMS = [
   { label: "Jobs", to: "/jobs" },
   { label: "Dashboard", to: "/dashboard" },
   { label: "Skills", to: "/skills" },
+  { label: "Resume", to: "/resume" },
   { label: "Import", to: "/import" },
 ];
 
-function App() {
+function AppContent() {
+  const auth = useAuth();
   return (
-    <ThemeProvider theme={theme}>
-      <CssBaseline />
-      <BrowserRouter>
+    <BrowserRouter>
         <Box sx={{ minHeight: "100vh", bgcolor: "background.default" }}>
           <AppBar position="sticky" elevation={1}>
             <Toolbar sx={{ maxWidth: 1200, width: "100%", mx: "auto", px: 2 }}>
@@ -64,26 +66,27 @@ function App() {
                   />
                 ))}
               </Tabs>
-              <Button
-                size="small"
-                startIcon={<BackupIcon />}
-                onClick={async () => {
-                  try {
-                    const blob = await api.createBackup();
-                    const url = URL.createObjectURL(blob);
-                    const a = document.createElement("a");
-                    a.href = url;
-                    a.download = `jobseeker_backup_${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "")}.sql`;
-                    a.click();
-                    URL.revokeObjectURL(url);
-                  } catch (e) {
-                    alert(e instanceof Error ? e.message : "Backup failed");
-                  }
-                }}
-                sx={{ color: "inherit", opacity: 0.85, "&:hover": { opacity: 1 }, mr: 1 }}
-              >
-                Backup DB
-              </Button>
+              {auth?.config?.enabled && (
+                auth?.authenticated ? (
+                  <Button
+                    size="small"
+                    startIcon={<LogoutIcon />}
+                    onClick={() => auth.logout()}
+                    sx={{ color: "inherit", opacity: 0.85, "&:hover": { opacity: 1 }, mr: 1 }}
+                  >
+                    Logout
+                  </Button>
+                ) : (
+                  <Button
+                    size="small"
+                    startIcon={<LoginIcon />}
+                    onClick={() => auth.login()}
+                    sx={{ color: "inherit", opacity: 0.85, "&:hover": { opacity: 1 }, mr: 1 }}
+                  >
+                    Login
+                  </Button>
+                )
+              )}
               <Tab
                 label="API Docs"
                 component="a"
@@ -102,11 +105,22 @@ function App() {
               <Route path="/jobs/:id" element={<JobDetailPage />} />
               <Route path="/dashboard" element={<DashboardPage />} />
               <Route path="/skills" element={<SkillsPage />} />
+              <Route path="/resume" element={<ResumeAnalysisPage />} />
               <Route path="/import" element={<ImportPage />} />
             </Routes>
           </Box>
         </Box>
       </BrowserRouter>
+  );
+}
+
+function App() {
+  return (
+    <ThemeProvider theme={theme}>
+      <CssBaseline />
+      <AuthProvider>
+        <AppContent />
+      </AuthProvider>
     </ThemeProvider>
   );
 }

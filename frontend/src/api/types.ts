@@ -149,3 +149,32 @@ export interface AnalyticsData {
   reposted_count: number;
   saved_count: number;
 }
+
+export interface ResumeMatchItem {
+  job: Job;
+  matched_skills: string[];
+  match_count: number;
+  match_ratio: number;
+}
+
+export interface SkillWithWeight {
+  skill: string;
+  weight: number;
+}
+
+export interface ResumeByCategory {
+  category: string;
+  job_count: number;
+  match_score: number;
+  matching_skills: SkillWithWeight[];
+  skills_to_add: SkillWithWeight[];
+}
+
+export interface ResumeAnalyzeResult {
+  extracted_skills: string[];
+  match_count: number;
+  matches: ResumeMatchItem[];
+  by_category: ResumeByCategory[];
+  message?: string;
+  summary?: string;
+}
