@@ -4,16 +4,6 @@ Track job offers from **JustJoin.it** and **NoFluffJobs**, with skills analytics
 
 ---
 
-## Short description (for GitHub repo)
-
-Use this in the repo **Description** field when creating or editing the repository:
-
-```
-Track job offers from JustJoin.it & NoFluffJobs. FastAPI + React + PostgreSQL. Bulk import, skills analytics, salary normalization, backup, dark mode.
-```
-
----
-
 ## Features
 
 - **Job list** — Filter by status, saved, seniority, category, work type, location; pagination; duplicate grouping; alternate listings (same job on multiple sites).
