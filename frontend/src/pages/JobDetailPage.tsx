@@ -10,17 +10,21 @@ import Alert from "@mui/material/Alert";
 import CircularProgress from "@mui/material/CircularProgress";
 import Divider from "@mui/material/Divider";
 import ArrowBackIcon from "@mui/icons-material/ArrowBack";
+import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
+import BookmarkIcon from "@mui/icons-material/Bookmark";
+import BookmarkBorderIcon from "@mui/icons-material/BookmarkBorder";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import { api } from "../api/client";
 import type { Job, JobStatus, DetectedSkill } from "../api/types";
 
-const STATUSES: JobStatus[] = ["new", "applied", "interview", "offer", "rejected"];
+const STATUSES: JobStatus[] = ["new", "seen", "applied", "interview", "offer", "rejected"];
 
-const STATUS_COLOR: Record<string, "default" | "primary" | "warning" | "success" | "error"> = {
+const STATUS_COLOR: Record<string, "default" | "primary" | "warning" | "success" | "error" | "info"> = {
   new: "primary",
+  seen: "default",
   applied: "warning",
-  interview: "primary",
+  interview: "info",
   offer: "success",
   rejected: "error",
 };
@@ -71,6 +75,12 @@ export function JobDetailPage() {
     finally { setSaving(false); }
   };
 
+  const handleToggleSaved = async () => {
+    setSaving(true);
+    try { setJob(await api.updateJob(job.id, { saved: !job.saved })); }
+    finally { setSaving(false); }
+  };
+
   const handleDelete = async () => {
     if (!confirm("Remove this job from tracking?")) return;
     setDeleting(true);
@@ -84,19 +94,46 @@ export function JobDetailPage() {
     <Paper sx={{ overflow: "hidden" }}>
       {/* Header */}
       <Box sx={{ p: 3, borderBottom: 1, borderColor: "divider" }}>
+        <Box sx={{ display: "flex", gap: 1, mb: 2 }}>
         <Button
           startIcon={<ArrowBackIcon />}
           size="small"
           onClick={() => navigate(-1)}
-          sx={{ mb: 2 }}
         >
           Back to list
         </Button>
+        {job.status !== "seen" && (
+          <Button
+            startIcon={<VisibilityOffIcon />}
+            size="small"
+            variant="outlined"
+            color="inherit"
+            onClick={async () => {
+              try { await api.updateJob(job.id, { status: "seen" }); } catch {}
+              navigate(-1);
+            }}
+            disabled={saving}
+          >
+            Seen &amp; Go Back
+          </Button>
+        )}
+        <Button
+          startIcon={job.saved ? <BookmarkIcon /> : <BookmarkBorderIcon />}
+          size="small"
+          variant="outlined"
+          color={job.saved ? "primary" : "inherit"}
+          onClick={handleToggleSaved}
+          disabled={saving}
+        >
+          {job.saved ? "Saved" : "Save for later"}
+        </Button>
+        </Box>
 
         <Box sx={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 2 }}>
           <Box>
             <Box sx={{ display: "flex", alignItems: "center", gap: 1 }}>
               <Typography variant="h5" fontWeight={700}>{job.title}</Typography>
+              {job.saved && <Chip label="Saved" size="small" color="primary" />}
               {job.is_reposted && <Chip label="Reposted" size="small" color="warning" />}
             </Box>
             <Typography variant="subtitle1" color="text.secondary">{job.company}</Typography>
@@ -220,9 +257,22 @@ export function JobDetailPage() {
         {job.description && (
           <Box>
             <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 1 }}>Job Description</Typography>
-            <Box sx={{ bgcolor: "grey.50", borderRadius: 2, p: 2, maxHeight: 320, overflow: "auto", whiteSpace: "pre-wrap", fontSize: 14 }}>
-              {job.description}
-            </Box>
+            <Box
+              sx={{
+                bgcolor: "background.paper",
+                borderRadius: 2,
+                p: 3,
+                maxHeight: 600,
+                overflow: "auto",
+                fontSize: 14,
+                lineHeight: 1.7,
+                "& h3": { fontSize: 15, fontWeight: 700, mt: 2.5, mb: 1, color: "text.primary" },
+                "& p": { my: 1, color: "text.secondary" },
+                "& ul": { pl: 2.5, my: 1 },
+                "& li": { mb: 0.5, color: "text.secondary" },
+              }}
+              dangerouslySetInnerHTML={{ __html: formatDescription(job.description) }}
+            />
           </Box>
         )}
 
@@ -272,6 +322,72 @@ function InfoItem({ label, value }: { label: string; value: string }) {
       <Typography variant="body2" fontWeight={500}>{value}</Typography>
     </Box>
   );
+}
+
+function escapeHtml(text: string): string {
+  return text
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function formatDescription(raw: string): string {
+  let text = raw.replace(/\xa0/g, " ").replace(/\r\n/g, "\n").replace(/\r/g, "\n");
+
+  // If the text has very few newlines relative to length, insert breaks
+  // at sentences that run together (period/colon followed by uppercase letter)
+  const newlineRatio = (text.match(/\n/g) || []).length / text.length;
+  if (newlineRatio < 0.005) {
+    text = text.replace(/([.!?])([A-ZŻŹĆĄŚĘŁÓŃ])/g, "$1\n\n$2");
+    text = text.replace(/:([A-ZŻŹĆĄŚĘŁÓŃ])/g, ":\n$1");
+  }
+
+  const lines = text.split("\n");
+  const htmlParts: string[] = [];
+  let inList = false;
+
+  const isBullet = (line: string) =>
+    /^\s*[•·–—\-\*►▸▹✓✔☑]\s/.test(line) || /^\s*\d+[.)]\s/.test(line);
+
+  const isHeader = (line: string) => {
+    const trimmed = line.trim();
+    if (!trimmed) return false;
+    if (trimmed.length > 80) return false;
+    if (/^[A-ZŻŹĆĄŚĘŁÓŃ\s&/,\-–:()]+$/.test(trimmed) && trimmed.length > 3) return true;
+    if (/:\s*$/.test(trimmed) && trimmed.length < 60) return true;
+    return false;
+  };
+
+  const stripBullet = (line: string) =>
+    line.replace(/^\s*[•·–—\-\*►▸▹✓✔☑]\s*/, "").replace(/^\s*\d+[.)]\s*/, "").trim();
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    if (!trimmed) {
+      if (inList) { htmlParts.push("</ul>"); inList = false; }
+      continue;
+    }
+
+    if (isBullet(trimmed)) {
+      if (!inList) { htmlParts.push("<ul>"); inList = true; }
+      htmlParts.push(`<li>${escapeHtml(stripBullet(trimmed))}</li>`);
+      continue;
+    }
+
+    if (inList) { htmlParts.push("</ul>"); inList = false; }
+
+    if (isHeader(trimmed)) {
+      htmlParts.push(`<h3>${escapeHtml(trimmed.replace(/:\s*$/, ""))}</h3>`);
+    } else {
+      htmlParts.push(`<p>${escapeHtml(trimmed)}</p>`);
+    }
+  }
+
+  if (inList) htmlParts.push("</ul>");
+
+  return htmlParts.join("");
 }
 
 function formatSalaryLines(job: Job) {

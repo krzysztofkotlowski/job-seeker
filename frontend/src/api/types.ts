@@ -13,7 +13,7 @@ export interface DetectedSkill {
   source_field: string;
 }
 
-export type JobStatus = "new" | "applied" | "interview" | "offer" | "rejected";
+export type JobStatus = "new" | "seen" | "applied" | "interview" | "offer" | "rejected";
 
 export interface Job {
   id: string;
@@ -38,6 +38,9 @@ export interface Job {
   status: JobStatus;
   applied_date: string | null;
   notes: string;
+  duplicate_count?: number;
+  detected_skills?: string[];
+  saved?: boolean;
 }
 
 export interface PaginatedResponse<T> {
@@ -137,4 +140,5 @@ export interface AnalyticsData {
   top_companies: { company: string; count: number }[];
   top_locations: { location: string; count: number }[];
   reposted_count: number;
+  saved_count: number;
 }

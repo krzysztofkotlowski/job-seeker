@@ -24,6 +24,7 @@ const COLORS = [
 
 const STATUS_COLORS: Record<string, string> = {
   new: "#6366f1",
+  seen: "#9ca3af",
   applied: "#0ea5e9",
   interview: "#f59e0b",
   offer: "#22c55e",
@@ -181,20 +182,26 @@ export function DashboardPage() {
         </ChartCard>
       )}
 
-      {/* Seniority + Work Type */}
+      {/* Seniority (pie, only when no seniority filter) + Work Type */}
       <Box sx={{ display: "grid", gridTemplateColumns: { md: "1fr 1fr" }, gap: 3 }}>
-        {data.by_seniority.length > 0 && (
+        {!selectedSeniority && data.by_seniority.length > 0 && (
           <ChartCard title="Jobs by Seniority">
-            <ResponsiveContainer width="100%" height={240}>
-              <BarChart data={data.by_seniority}>
-                <CartesianGrid strokeDasharray="3 3" />
-                <XAxis dataKey="seniority" tick={{ fontSize: 12 }} />
-                <YAxis />
+            <ResponsiveContainer width="100%" height={260}>
+              <PieChart>
+                <Pie
+                  data={data.by_seniority}
+                  dataKey="count"
+                  nameKey="seniority"
+                  cx="50%"
+                  cy="50%"
+                  outerRadius={90}
+                  label={(props) => `${props.name ?? ""} (${props.value})`}
+                >
+                  {data.by_seniority.map((_, i) => <Cell key={i} fill={COLORS[i % COLORS.length]} />)}
+                </Pie>
                 <Tooltip />
-                <Bar dataKey="count" fill="#8b5cf6" radius={[4, 4, 0, 0]}>
-                  <LabelList dataKey="count" position="top" style={{ fontSize: 11, fill: "#555" }} />
-                </Bar>
-              </BarChart>
+                <Legend />
+              </PieChart>
             </ResponsiveContainer>
           </ChartCard>
         )}

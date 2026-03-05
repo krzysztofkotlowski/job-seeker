@@ -1,18 +1,24 @@
+import Chip from "@mui/material/Chip";
 import type { JobStatus } from "../api/types";
 
-const STATUS_CONFIG: Record<JobStatus, { label: string; bg: string; text: string }> = {
-  new: { label: "New", bg: "bg-blue-100", text: "text-blue-800" },
-  applied: { label: "Applied", bg: "bg-yellow-100", text: "text-yellow-800" },
-  interview: { label: "Interview", bg: "bg-purple-100", text: "text-purple-800" },
-  offer: { label: "Offer", bg: "bg-green-100", text: "text-green-800" },
-  rejected: { label: "Rejected", bg: "bg-red-100", text: "text-red-800" },
+const STATUS_CONFIG: Record<JobStatus, { label: string; color: "primary" | "warning" | "success" | "error" | "info" | "default" }> = {
+  new: { label: "New", color: "primary" },
+  seen: { label: "Seen", color: "default" },
+  applied: { label: "Applied", color: "warning" },
+  interview: { label: "Interview", color: "info" },
+  offer: { label: "Offer", color: "success" },
+  rejected: { label: "Rejected", color: "error" },
 };
 
 export function StatusBadge({ status }: { status: JobStatus }) {
   const cfg = STATUS_CONFIG[status] ?? STATUS_CONFIG.new;
   return (
-    <span className={`inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-medium ${cfg.bg} ${cfg.text}`}>
-      {cfg.label}
-    </span>
+    <Chip
+      label={cfg.label}
+      size="small"
+      color={cfg.color}
+      variant="filled"
+      sx={{ height: 22, fontSize: 11, fontWeight: 600 }}
+    />
   );
 }

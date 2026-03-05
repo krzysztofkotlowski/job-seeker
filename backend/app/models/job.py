@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 class JobStatus(str, Enum):
     NEW = "new"
+    SEEN = "seen"
     APPLIED = "applied"
     INTERVIEW = "interview"
     OFFER = "offer"
@@ -51,6 +52,7 @@ class JobUpdate(BaseModel):
     applied_date: Optional[str] = None
     notes: Optional[str] = None
     is_reposted: Optional[bool] = None
+    saved: Optional[bool] = None
 
 
 class Job(JobBase):
@@ -61,6 +63,7 @@ class Job(JobBase):
     notes: str = ""
     is_reposted: bool = False
     original_job_id: Optional[str] = None
+    saved: bool = False
 
 
 class ParseRequest(BaseModel):

@@ -180,7 +180,7 @@ function TaskCard({ task, onStart }: { task: ImportTask; onStart: () => void }) 
           <Typography variant="caption" color="error" sx={{ cursor: "pointer" }}>
             {task.error_log.length} error(s)
           </Typography>
-          <Box sx={{ mt: 0.5, maxHeight: 120, overflow: "auto", bgcolor: "grey.50", p: 1, borderRadius: 1, fontFamily: "monospace", fontSize: 11 }}>
+          <Box sx={{ mt: 0.5, maxHeight: 120, overflow: "auto", bgcolor: "background.paper", p: 1, borderRadius: 1, fontFamily: "monospace", fontSize: 11 }}>
             {task.error_log.map((e, i) => (
               <Box key={i} sx={{ overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e}</Box>
             ))}

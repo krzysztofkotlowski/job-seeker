@@ -46,6 +46,7 @@ class JobRow(Base):
     status = Column(String(20), nullable=False, default="new")
     applied_date = Column(String(20), nullable=True)
     notes = Column(Text, default="")
+    saved = Column(Boolean, default=False, server_default="false")
 
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
@@ -90,6 +91,7 @@ class JobRow(Base):
             "status": self.status,
             "applied_date": self.applied_date,
             "notes": self.notes or "",
+            "saved": self.saved or False,
         }
 
 

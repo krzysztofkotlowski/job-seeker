@@ -194,7 +194,8 @@ def _prepare_source(source: str):
         )
         log.info("Starting fresh %s import", source)
     else:
-        log.info("Resuming %s (%d pending)", source, len(task["pending_urls"]))
+        _update_task(source, errors=0, error_log=[])
+        log.info("Resuming %s (%d pending), errors cleared", source, len(task["pending_urls"]))
 
 
 def _should_stop(source: str) -> bool:

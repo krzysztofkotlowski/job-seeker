@@ -6,7 +6,10 @@ import Typography from "@mui/material/Typography";
 import Box from "@mui/material/Box";
 import Tab from "@mui/material/Tab";
 import Tabs from "@mui/material/Tabs";
+import Button from "@mui/material/Button";
 import WorkOutlineIcon from "@mui/icons-material/WorkOutline";
+import BackupIcon from "@mui/icons-material/Backup";
+import { api } from "./api/client";
 import { JobListPage } from "./pages/JobListPage";
 import { JobDetailPage } from "./pages/JobDetailPage";
 import { SkillsPage } from "./pages/SkillsPage";
@@ -15,9 +18,9 @@ import { DashboardPage } from "./pages/DashboardPage";
 
 const theme = createTheme({
   palette: {
-    primary: { main: "#4f46e5" },
-    secondary: { main: "#0ea5e9" },
-    background: { default: "#f8fafc" },
+    mode: "dark",
+    primary: { main: "#818cf8" },
+    secondary: { main: "#38bdf8" },
   },
   typography: {
     fontFamily: "'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif",
@@ -42,7 +45,7 @@ function App() {
       <CssBaseline />
       <BrowserRouter>
         <Box sx={{ minHeight: "100vh", bgcolor: "background.default" }}>
-          <AppBar position="sticky" elevation={1} sx={{ bgcolor: "white", color: "text.primary" }}>
+          <AppBar position="sticky" elevation={1}>
             <Toolbar sx={{ maxWidth: 1200, width: "100%", mx: "auto", px: 2 }}>
               <WorkOutlineIcon sx={{ color: "primary.main", mr: 1 }} />
               <Typography variant="h6" fontWeight={700} sx={{ mr: 4 }}>
@@ -61,6 +64,26 @@ function App() {
                   />
                 ))}
               </Tabs>
+              <Button
+                size="small"
+                startIcon={<BackupIcon />}
+                onClick={async () => {
+                  try {
+                    const blob = await api.createBackup();
+                    const url = URL.createObjectURL(blob);
+                    const a = document.createElement("a");
+                    a.href = url;
+                    a.download = `jobseeker_backup_${new Date().toISOString().slice(0, 19).replace(/[-:T]/g, "")}.sql`;
+                    a.click();
+                    URL.revokeObjectURL(url);
+                  } catch (e) {
+                    alert(e instanceof Error ? e.message : "Backup failed");
+                  }
+                }}
+                sx={{ color: "inherit", opacity: 0.85, "&:hover": { opacity: 1 }, mr: 1 }}
+              >
+                Backup DB
+              </Button>
               <Tab
                 label="API Docs"
                 component="a"

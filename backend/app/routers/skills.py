@@ -14,8 +14,9 @@ router = APIRouter()
 def skills_summary(
     top: int = Query(30, ge=1, le=500),
     page: int = Query(1, ge=1),
-    per_page: int = Query(50, ge=1, le=200),
+    per_page: int = Query(50, ge=1, le=500),
     category: Optional[str] = Query(None),
+    search: Optional[str] = Query(None),
     db: Session = Depends(get_db),
 ):
     base = db.query(JobRow)
@@ -45,6 +46,11 @@ def skills_summary(
         all_skills[s] = all_skills.get(s, 0) + c
 
     sorted_skills = sorted(all_skills.items(), key=lambda x: x[1], reverse=True)
+
+    if search:
+        pattern = search.lower()
+        sorted_skills = [(s, c) for s, c in sorted_skills if pattern in s.lower()]
+
     total_skills = len(sorted_skills)
 
     offset = (page - 1) * per_page
