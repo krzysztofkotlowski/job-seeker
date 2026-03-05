@@ -3,17 +3,18 @@ from collections.abc import Generator
 
 import pytest
 from fastapi.testclient import TestClient
+
+# Disable Keycloak auth for tests (auth is optional when KEYCLOAK_URL is unset)
+os.environ.pop("KEYCLOAK_URL", None)
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.database import Base, get_db
 from app.main import app
 
-
 TEST_DATABASE_URL = os.environ.get("TEST_DATABASE_URL") or os.environ.get(
     "DATABASE_URL", "postgresql://jobseeker:jobseeker@localhost:5432/jobseeker_test"
 )
-
 engine = create_engine(TEST_DATABASE_URL, pool_pre_ping=True)
 TestingSessionLocal = sessionmaker(bind=engine, autoflush=False, autocommit=False)
 
@@ -43,4 +44,14 @@ def prepare_database() -> Generator[None, None, None]:
 @pytest.fixture
 def client() -> TestClient:
     return TestClient(app)
+
+
+@pytest.fixture
+def db():
+    """Provide a test DB session for assertions."""
+    session = TestingSessionLocal()
+    try:
+        yield session
+    finally:
+        session.close()
 

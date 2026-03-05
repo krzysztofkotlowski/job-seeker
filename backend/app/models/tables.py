@@ -11,6 +11,26 @@ from sqlalchemy.orm import relationship
 from app.database import Base
 
 
+class UserRow(Base):
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    keycloak_id = Column(String(255), unique=True, nullable=False, index=True)
+    email = Column(String(255), nullable=True)
+    username = Column(String(255), nullable=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class ResumeRow(Base):
+    __tablename__ = "resumes"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="CASCADE"), nullable=False, index=True)
+    filename = Column(String(255), nullable=False)
+    extracted_skills = Column(ARRAY(Text), default=list)
+    uploaded_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
 class JobRow(Base):
     __tablename__ = "jobs"
 
