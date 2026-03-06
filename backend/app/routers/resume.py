@@ -18,6 +18,7 @@ from app.services.resume_service import (
     build_by_category,
     match_jobs_to_skills,
     merge_keyword_and_semantic_matches,
+    retrieve_hybrid_recommendations,
     retrieve_semantic_matches,
     RAG_ENABLED,
 )
@@ -143,6 +144,39 @@ async def analyze_resume(
     except Exception as e:
         log.exception("Resume analyze failed")
         raise HTTPException(500, f"Resume analysis failed: {e!s}")
+
+
+@router.post("/recommendations")
+def get_recommendations(
+    body: dict = Body(
+        ...,
+        examples=[{"extracted_skills": ["Python", "FastAPI"]}],
+    ),
+    db: Session = Depends(get_db),
+):
+    """Return hybrid search job recommendations for given skills. Called in background after analyze."""
+    extracted_skills = body.get("extracted_skills") or []
+    if not extracted_skills:
+        return {"recommendations": []}
+    try:
+        recs = retrieve_hybrid_recommendations(db, set(extracted_skills), top_k=8)
+        recommendations = []
+        for r in recs:
+            job = r.get("job") or {}
+            recommendations.append({
+                "job": {
+                    "id": job.get("id"),
+                    "title": job.get("title"),
+                    "company": job.get("company"),
+                    "url": job.get("url"),
+                    "category": job.get("category"),
+                },
+                "score": r.get("score"),
+            })
+        return {"recommendations": recommendations}
+    except Exception as e:
+        log.exception("Recommendations failed")
+        raise HTTPException(500, f"Recommendations failed: {e!s}")
 
 
 @router.post("/summarize")

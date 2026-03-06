@@ -165,6 +165,51 @@ def retrieve_semantic_matches(
     return results
 
 
+def retrieve_hybrid_recommendations(
+    db: Session,
+    extracted_skills: set[str],
+    top_k: int = 10,
+) -> list[dict]:
+    """
+    RAG: hybrid search (vector + keyword) in Elasticsearch, return job recommendations with URLs from DB.
+    Returns [] if RAG unavailable (ES or embeddings disabled).
+    """
+    try:
+        from app.services.embedding_service import embed_text
+        from app.services.elasticsearch_service import is_available, search_hybrid
+    except ImportError:
+        return []
+
+    if not is_available():
+        return []
+    query_text = " ".join(sorted(extracted_skills)) if extracted_skills else ""
+    if not query_text.strip():
+        return []
+    embedding = embed_text(query_text)
+    if not embedding:
+        return []
+    hits = search_hybrid(query_text=query_text, query_embedding=embedding, top_k=top_k)
+    if not hits:
+        return []
+    results = []
+    for h in hits:
+        job_id = h.get("job_id")
+        if not job_id:
+            continue
+        try:
+            uid = UUID(job_id) if isinstance(job_id, str) else job_id
+        except (ValueError, TypeError):
+            continue
+        row = db.query(JobRow).filter(JobRow.id == uid).first()
+        if row:
+            job_dict = row.to_dict()
+            results.append({
+                "job": job_dict,
+                "score": float(h.get("score", 0)),
+            })
+    return results
+
+
 def merge_keyword_and_semantic_matches(
     keyword_matches: list[dict],
     semantic_matches: list[dict],

@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 log = logging.getLogger(__name__)
 
 ES_URL = os.environ.get("ELASTICSEARCH_URL", "http://localhost:9200").rstrip("/")
+ES_TIMEOUT = int(os.environ.get("ES_TIMEOUT", "30"))
 JOBS_INDEX = "jobseeker_jobs"
 
 
@@ -38,7 +39,7 @@ def _get_client() -> Elasticsearch | None:
     try:
         return Elasticsearch(
             ES_URL,
-            request_timeout=10,
+            request_timeout=ES_TIMEOUT,
         )
     except Exception as e:
         log.debug("Elasticsearch client init failed: %s", e)
@@ -248,6 +249,98 @@ def bulk_index_jobs_stream(jobs: list["JobRow"]):
         set_sync_in_progress(False)
 
 
+def search_keyword(
+    query_text: str,
+    top_k: int = 10,
+) -> list[dict]:
+    """
+    Keyword search (multi_match) only. No kNN, no RRF. Works with free ES license.
+    Returns list of dicts with job_id, title, company, url, category, score.
+    """
+    client = _get_client()
+    if not client or not (query_text or "").strip():
+        return []
+    try:
+        resp = client.search(
+            index=JOBS_INDEX,
+            query={
+                "multi_match": {
+                    "query": query_text.strip(),
+                    "fields": ["title^2", "company", "skills_combined^1.5", "description"],
+                    "type": "best_fields",
+                    "fuzziness": "AUTO",
+                }
+            },
+            _source=["job_id", "title", "company", "url", "category"],
+            size=top_k,
+        )
+        hits = resp.get("hits", {}).get("hits", [])
+        out = []
+        for h in hits:
+            src = h.get("_source", {})
+            score = h.get("_score", 0)
+            out.append({
+                "job_id": src.get("job_id"),
+                "title": src.get("title", ""),
+                "company": src.get("company", ""),
+                "url": src.get("url", ""),
+                "category": src.get("category", ""),
+                "score": float(score),
+            })
+        return out
+    except Exception as e:
+        log.warning("Keyword search failed: %s", e)
+        return []
+
+
+def _merge_rrf(
+    hits_a: list[dict],
+    hits_b: list[dict],
+    k: int = 60,
+) -> list[dict]:
+    """
+    Merge two hit lists using Reciprocal Rank Fusion. Dedupes by job_id.
+    RRF score = 1/(k+rank_a) + 1/(k+rank_b). Missing rank uses k+len+1.
+    """
+    def _job_id(h: dict) -> str | None:
+        j = h.get("job_id")
+        return str(j) if j is not None else None
+
+    rank_a: dict[str, int] = {}
+    rank_b: dict[str, int] = {}
+    doc_a: dict[str, dict] = {}
+    doc_b: dict[str, dict] = {}
+
+    for i, h in enumerate(hits_a):
+        jid = _job_id(h)
+        if jid and jid not in rank_a:
+            rank_a[jid] = i + 1
+            doc_a[jid] = h
+
+    for i, h in enumerate(hits_b):
+        jid = _job_id(h)
+        if jid and jid not in rank_b:
+            rank_b[jid] = i + 1
+            doc_b[jid] = h
+
+    all_ids = set(rank_a) | set(rank_b)
+    max_rank = max(len(hits_a), len(hits_b), 1) + 1
+
+    scored: list[tuple[float, dict]] = []
+    for jid in all_ids:
+        r_a = rank_a.get(jid, max_rank)
+        r_b = rank_b.get(jid, max_rank)
+        rrf_score = 1.0 / (k + r_a) + 1.0 / (k + r_b)
+        doc = doc_a.get(jid) or doc_b.get(jid)
+        if doc:
+            doc = dict(doc)
+            doc["score"] = rrf_score
+            scored.append((rrf_score, doc))
+
+    scored.sort(key=lambda x: -x[0])
+    return [d for _, d in scored]
+
+
 def search_similar(
     query_embedding: list[float],
     top_k: int = 10,
@@ -287,3 +380,34 @@ def search_similar(
     except Exception as e:
         log.warning("kNN search failed: %s", e)
         return []
+
+
+def search_hybrid(
+    query_text: str,
+    query_embedding: list[float],
+    top_k: int = 10,
+) -> list[dict]:
+    """
+    Hybrid search: combines keyword (multi_match) and kNN vector search.
+    Uses Python-side RRF merge to avoid Elasticsearch paid license requirement.
+    Returns list of dicts with job_id, title, company, url, category, score.
+    """
+    if not query_embedding:
+        return []
+    query_text = (query_text or "").strip()
+    if not query_text:
+        return search_similar(query_embedding, top_k)
+
+    # Run both searches (no ES RRF - works with free license)
+    keyword_hits = search_keyword(query_text, top_k=top_k * 2)
+    knn_hits = search_similar(query_embedding, top_k=top_k * 2)
+
+    if not keyword_hits and not knn_hits:
+        return []
+    if not keyword_hits:
+        return knn_hits[:top_k]
+    if not knn_hits:
+        return keyword_hits[:top_k]
+
+    merged = _merge_rrf(keyword_hits, knn_hits, k=60)
+    return merged[:top_k]

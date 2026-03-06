@@ -52,10 +52,9 @@ def get_llm_config() -> LLMConfig:
 
 
 SYSTEM_MSG = (
-    "You are a career advisor. The user message contains the actual data to analyze. "
-    "Write the analysis using ONLY the categories and jobs listed in that message. Never invent or add anything not in the list. "
-    "For each job use: [Title at Company](url) with the exact URL from the list. "
-    "Output markdown: ## headers, **bold**, - lists. Be concise."
+    "You are a career advisor. The user message contains resume match data (categories and skills). "
+    "Output ONLY: ## Your strongest fields, then 1-2 sentences per category (strengths, skills to add). "
+    "Do NOT list jobs. Use markdown: ## headers, **bold**, - lists. Be concise."
 )
 
 
@@ -203,9 +202,7 @@ def _build_prompt(
     matches: list[dict],
     by_category: list[dict],
 ) -> str:
-    """Build a short, structured prompt. Truncated to avoid context overflow."""
-    matches = _dedupe_matches(matches)
-
+    """Build a short, structured prompt (skills and categories only; no jobs)."""
     top_cats = sorted(by_category, key=lambda c: c.get("match_score", 0), reverse=True)[:5]
     cat_lines = []
     for c in top_cats:
@@ -217,26 +214,12 @@ def _build_prompt(
         add_skills = ", ".join(s.get("skill", "") for s in to_add[:4]) if to_add else "none"
         cat_lines.append(f"- {cat} ({score}/100): strengths: {match_skills}. Add: {add_skills}")
 
-    jobs_lines = []
-    for m in matches:
-        job = m.get("job") or {}
-        title = job.get("title", "?")
-        company = job.get("company", "?")
-        url = (job.get("url") or "").strip()
-        if _is_valid_url(url):
-            jobs_lines.append(f"- {title} at {company}: {url}")
-        elif title or company:
-            jobs_lines.append(f"- {title} at {company}")
-
-    prompt = f"""Analyze this resume match data and write a short summary. The data is provided here—do not say you lack access to it.
+    prompt = f"""Analyze this resume match data. The data is provided here—do not say you lack access to it.
 
 CATEGORIES (match scores):
 {chr(10).join(cat_lines)}
 
-JOBS TO RECOMMEND (use these exact entries):
-{chr(10).join(jobs_lines)}
-
-Write your response: 1-2 sentences per category, then list each job as [Title at Company](url). Use the URLs exactly as shown above."""
+Write your response: ## Your strongest fields, then 1-2 sentences per category (strengths, skills to add). Do NOT list jobs."""
 
     if len(prompt) > _MAX_PROMPT_CHARS:
         prompt = prompt[: _MAX_PROMPT_CHARS] + "\n\n[truncated]"
@@ -336,10 +319,10 @@ async def summarize_resume_match(
     Call Ollama to generate a human-readable summary of the resume-job match.
     Returns None if LLM is disabled, unavailable, or errors.
     """
-    if not extracted_skills and not matches and not by_category:
+    if not extracted_skills and not by_category:
         return None
 
-    prompt = _build_prompt(extracted_skills, matches, by_category)
+    prompt = _build_prompt(extracted_skills, matches or [], by_category)
     messages = [
         {"role": "system", "content": SYSTEM_MSG},
         {"role": "user", "content": prompt},
@@ -360,10 +343,10 @@ async def summarize_resume_match_stream(
     """
     Stream summary chunks from Ollama. Yields text chunks as they arrive.
     """
-    if not extracted_skills and not matches and not by_category:
+    if not extracted_skills and not by_category:
         return
 
-    prompt = _build_prompt(extracted_skills, matches, by_category)
+    prompt = _build_prompt(extracted_skills, matches or [], by_category)
     messages = [
         {"role": "system", "content": SYSTEM_MSG},
         {"role": "user", "content": prompt},
