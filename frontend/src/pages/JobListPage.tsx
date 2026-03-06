@@ -18,6 +18,7 @@ import Pagination from "@mui/material/Pagination";
 import Typography from "@mui/material/Typography";
 import Button from "@mui/material/Button";
 import Collapse from "@mui/material/Collapse";
+import Fade from "@mui/material/Fade";
 import Autocomplete from "@mui/material/Autocomplete";
 import CircularProgress from "@mui/material/CircularProgress";
 import Divider from "@mui/material/Divider";
@@ -87,6 +88,7 @@ export function JobListPage() {
   const [topSkills, setTopSkills] = useState<string[]>([]);
   const [showFilters, setShowFilters] = useState(true);
   const [filtersRestored, setFiltersRestored] = useState(false);
+  const [readyToFetch, setReadyToFetch] = useState(false);
   const [counts, setCounts] = useState<{ by_status: Record<string, number>; saved_count: number } | null>(null);
   const [debouncedSearch, setDebouncedSearch] = useState("");
 
@@ -101,7 +103,8 @@ export function JobListPage() {
   const category = searchParams.get("category") || "";
   const seniority = searchParams.get("seniority") || "";
   const seniorityArr = seniority ? seniority.split(",") : [];
-  const skill = searchParams.get("skill") || "";
+  const skillsParam = searchParams.get("skills") || searchParams.get("skill") || "";
+  const skillsArr = skillsParam ? skillsParam.split(",").map((s) => s.trim()).filter(Boolean) : [];
   const savedFilter = searchParams.get("saved") || "";
   const showDuplicates = searchParams.get("group_duplicates") === "true";
 
@@ -118,18 +121,20 @@ export function JobListPage() {
 
   // Debounce search for analytics to avoid a request on every keystroke
   useEffect(() => {
+    setDebouncedSearch((prev) => (prev === "" && search ? search : prev));
     const t = setTimeout(() => setDebouncedSearch(search), 400);
     return () => clearTimeout(t);
   }, [search]);
 
   // Fetch status/saved counts for current filters (updates chip numbers when filters change)
   useEffect(() => {
+    if (!readyToFetch) return;
     const ac = new AbortController();
     const params = {
       source: source || undefined,
       category: category || undefined,
       seniority: seniority || undefined,
-      skill: skill || undefined,
+      skills: skillsParam || undefined,
       search: debouncedSearch || undefined,
       is_reposted: reposted === "true" ? true : reposted === "false" ? false : undefined,
       work_type: workType || undefined,
@@ -146,13 +151,14 @@ export function JobListPage() {
         if (!ac.signal.aborted) setCounts(null);
       });
     return () => ac.abort();
-  }, [source, category, seniority, skill, debouncedSearch, reposted, workType, location, savedFilter, showDuplicates]);
+  }, [readyToFetch, source, category, seniority, skillsParam, debouncedSearch, reposted, workType, location, savedFilter, showDuplicates]);
 
   useEffect(() => {
     if (filtersRestored) return;
     const keys = [...searchParams.keys()].filter((k) => k !== "page");
     if (keys.length > 0) {
       setFiltersRestored(true);
+      setReadyToFetch(true);
       return;
     }
     setFiltersRestored(true);
@@ -165,6 +171,7 @@ export function JobListPage() {
     } catch {
       // ignore
     }
+    setReadyToFetch(true);
   }, [filtersRestored, searchParams, setSearchParams]);
 
   useEffect(() => {
@@ -187,7 +194,7 @@ export function JobListPage() {
         location: location || undefined,
         category: category || undefined,
         seniority: seniority || undefined,
-        skill: skill || undefined,
+        skills: skillsParam || undefined,
         saved: savedFilter === "true" ? true : savedFilter === "false" ? false : undefined,
         group_duplicates: !showDuplicates,
       });
@@ -197,11 +204,12 @@ export function JobListPage() {
     } finally {
       setLoading(false);
     }
-  }, [page, status, source, search, reposted, sortBy, workType, location, category, seniority, skill, savedFilter, showDuplicates]);
+  }, [page, status, source, search, reposted, sortBy, workType, location, category, seniority, skillsParam, savedFilter, showDuplicates]);
 
   useEffect(() => {
+    if (!readyToFetch) return;
     fetchJobs();
-  }, [fetchJobs]);
+  }, [readyToFetch, fetchJobs]);
 
   const setFilter = (key: string, value: string) => {
     const next = new URLSearchParams(searchParams);
@@ -236,7 +244,7 @@ export function JobListPage() {
   }
   if (workType) activeFilters.push({ key: "work_type", label: `Work: ${workType}` });
   if (location) activeFilters.push({ key: "location", label: `Location: ${location}` });
-  if (skill) activeFilters.push({ key: "skill", label: `Skill: ${skill}` });
+  skillsArr.forEach((s) => activeFilters.push({ key: `skill:${s}`, label: `Skill: ${s}` }));
   if (reposted) activeFilters.push({ key: "is_reposted", label: reposted === "true" ? "Reposted" : "Original" });
   if (showDuplicates) activeFilters.push({ key: "group_duplicates", label: "Show duplicates" });
   if (sortBy) activeFilters.push({ key: "sort_by", label: `Sort: ${SORT_OPTIONS.find((o) => o.value === sortBy)?.label ?? sortBy}` });
@@ -433,18 +441,31 @@ export function JobListPage() {
               </FormControl>
               <FilterSelect label="Work Type" value={workType} onChange={(v) => setFilter("work_type", v)} options={[{ value: "", label: "All Work Types" }, ...workTypes.map((wt) => ({ value: wt, label: wt }))]} />
             </Box>
-            <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr 1fr", md: "1fr 1fr 1fr 1fr" }, gap: 1.5, mt: 1.5, alignItems: "center" }}>
-              <FilterSelect label="Location" value={location} onChange={(v) => setFilter("location", v)} options={[{ value: "", label: "All Locations" }, ...locations.map((loc) => ({ value: loc, label: loc }))]} />
-              <FilterSelect label="Reposted" value={reposted} onChange={(v) => setFilter("is_reposted", v)} options={REPOSTED_OPTIONS} />
-              <FilterSelect label="Sort By" value={sortBy} onChange={(v) => setFilter("sort_by", v)} options={SORT_OPTIONS} />
-              <Autocomplete
-                size="small"
-                freeSolo
-                options={topSkills}
-                value={skill || null}
-                onChange={(_e, val) => setFilter("skill", val ?? "")}
-                renderInput={(params) => <TextField {...params} label="Skill" />}
-              />
+            <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 1.5, mt: 1.5 }}>
+              <FilterSelect label="Location" value={location} onChange={(v) => setFilter("location", v)} options={[{ value: "", label: "All Locations" }, ...locations.map((loc) => ({ value: loc, label: loc }))]} sx={{ minWidth: 140 }} />
+              <FilterSelect label="Reposted" value={reposted} onChange={(v) => setFilter("is_reposted", v)} options={REPOSTED_OPTIONS} sx={{ minWidth: 130 }} />
+              <Box sx={{ flex: 1, minWidth: 200 }}>
+                <Autocomplete
+                  size="small"
+                  multiple
+                  freeSolo
+                  options={topSkills}
+                  value={skillsArr}
+                  onChange={(_e, val) => setFilter("skills", (val as string[]).join(","))}
+                  renderInput={(params) => <TextField {...params} label="Skills (all must match)" placeholder="Add skills…" />}
+                  renderTags={(value, getTagProps) =>
+                    value.map((option, index) => (
+                      <Chip
+                        {...getTagProps({ index })}
+                        key={option}
+                        label={option}
+                        size="small"
+                        variant="outlined"
+                      />
+                    ))
+                  }
+                />
+              </Box>
               <FormControlLabel
                 control={
                   <Checkbox
@@ -456,6 +477,9 @@ export function JobListPage() {
                 label={<Typography variant="caption" color="text.secondary">Show duplicates (list shows one per job by default)</Typography>}
                 sx={{ mt: 0.5 }}
               />
+              <Box sx={{ ml: "auto", minWidth: 180 }}>
+                <FilterSelect label="Sort By" value={sortBy} onChange={(v) => setFilter("sort_by", v)} options={SORT_OPTIONS} />
+              </Box>
             </Box>
 
             {activeFilters.length > 0 && (
@@ -474,6 +498,10 @@ export function JobListPage() {
                           const toRemove = f.key.split(":")[1];
                           const remaining = seniorityArr.filter((s) => s !== toRemove);
                           setFilter("seniority", remaining.join(","));
+                        } else if (f.key.startsWith("skill:")) {
+                          const toRemove = f.key.slice(6);
+                          const remaining = skillsArr.filter((s) => s !== toRemove);
+                          setFilter("skills", remaining.join(","));
                         } else if (f.key === "group_duplicates") {
                           setFilter("group_duplicates", "");
                         } else {
@@ -490,20 +518,25 @@ export function JobListPage() {
 
         {/* Content */}
         {loading ? (
-          <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", py: 8 }}>
-            <CircularProgress size={32} />
-            <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
-              Loading jobs...
-            </Typography>
-          </Box>
+          <Fade in>
+            <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", py: 8, transition: "opacity 0.2s ease" }}>
+              <CircularProgress size={32} />
+              <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
+                Loading jobs...
+              </Typography>
+            </Box>
+          </Fade>
         ) : jobs.length === 0 ? (
-          <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", py: 8, color: "text.secondary" }}>
-            <InboxIcon sx={{ fontSize: 48, mb: 1, color: "grey.400" }} />
-            <Typography variant="h6" color="text.secondary">No jobs found</Typography>
-            <Typography variant="body2">Try changing filters or importing jobs first</Typography>
-          </Box>
+          <Fade in>
+            <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", py: 8, color: "text.secondary" }}>
+              <InboxIcon sx={{ fontSize: 48, mb: 1, color: "grey.400" }} />
+              <Typography variant="h6" color="text.secondary">No jobs found</Typography>
+              <Typography variant="body2">Try changing filters or importing jobs first</Typography>
+            </Box>
+          </Fade>
         ) : (
-          <Box>
+          <Fade in>
+          <Box sx={{ transition: "opacity 0.2s ease" }}>
             {jobs.map((job, idx) => {
               const sal = formatSalary(job);
               return (
@@ -638,6 +671,7 @@ export function JobListPage() {
               );
             })}
           </Box>
+          </Fade>
         )}
 
         {/* Pagination */}
@@ -671,14 +705,16 @@ function FilterSelect({
   value,
   onChange,
   options,
+  sx,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   options: { value: string; label: string }[];
+  sx?: object;
 }) {
   return (
-    <FormControl size="small" fullWidth>
+    <FormControl size="small" fullWidth sx={sx}>
       <InputLabel>{label}</InputLabel>
       <Select
         value={value}

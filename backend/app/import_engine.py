@@ -1,6 +1,7 @@
 """Background import engine with persistent progress stored in PostgreSQL."""
 
 import logging
+import os
 import time
 import uuid
 from datetime import date, datetime, timezone
@@ -8,6 +9,10 @@ from datetime import date, datetime, timezone
 from sqlalchemy import func
 
 from app.database import SessionLocal
+
+# When set (ENRICH_ON_IMPORT=1), NoFluffJobs jobs from API will be re-fetched per-URL
+# to get description and skills_nice_to_have. Slower import, richer data.
+ENRICH_ON_IMPORT = os.environ.get("ENRICH_ON_IMPORT", "").lower() in ("1", "true", "yes")
 from app.models.tables import JobRow, ImportTaskRow
 from app.parsers.justjoin import JustJoinParser
 from app.parsers.nofluffjobs import NoFluffJobsParser
@@ -16,7 +21,7 @@ from app.services.skill_detector import run_detection_batch
 
 log = logging.getLogger(__name__)
 
-SOURCES = ("justjoin.it", "nofluffjobs.com")
+SOURCES = ("nofluffjobs.com", "justjoin.it")
 
 
 def recover_interrupted_imports():
@@ -479,6 +484,17 @@ def _run_nofluffjobs():
                             error_log.append(f"{url}: {e}")
                             log.warning("[NF] Parse error %s: %s", url, e)
                             continue
+                    elif ENRICH_ON_IMPORT and (
+                        not parsed.description or not parsed.description.strip()
+                        or not parsed.skills_nice_to_have
+                    ):
+                        try:
+                            enriched = NoFluffJobsParser().parse(url)
+                            if enriched.description or enriched.skills_nice_to_have:
+                                parsed = enriched
+                            time.sleep(0.5)
+                        except Exception as e:
+                            log.debug("[NF] Enrich skip %s: %s", url, e)
 
                     try:
                         original = _find_repost(db, parsed.title, parsed.company, url)

@@ -20,12 +20,85 @@ import UploadFileIcon from "@mui/icons-material/UploadFile";
 import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import AddCircleOutlineIcon from "@mui/icons-material/AddCircleOutline";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { api } from "../api/client";
 import type { ResumeAnalyzeResult, ResumeByCategory, SkillWithWeight } from "../api/types";
 
 const ACCEPT = ".pdf";
 const ANALYZE_TIMEOUT_MS = 45000;
 const SUMMARIZE_TIMEOUT_MS = 120000;
+
+const ECHO_PREFIXES = [
+  "Format:",
+  "Resume skills:",
+  "By role/field",
+  "Do not repeat",
+  "TASK:",
+  "Section 1:",
+  "Section 2:",
+  "Section 3:",
+  "Categories:",
+  "Jobs to recommend:",
+  "Write the analysis",
+  "Analyze the data",
+  "Use ONLY",
+];
+
+const CATEGORY_MATCH = /^(.+?):\s*match\s*(\d+)\/100\.?\s*(.+)$/m;
+
+/** Convert plain text to basic markdown when model ignores formatting. */
+function formatSummaryForMarkdown(text: string): string {
+  if (!text?.trim()) return text;
+
+  const lines = text.trim().split("\n");
+  const filtered = lines.filter((line) => {
+    const t = line.trim();
+    return t && !ECHO_PREFIXES.some((p) => t.startsWith(p));
+  });
+  const cleaned = filtered.join("\n").trim();
+  if (!cleaned) return text.trim();
+
+  const categoryBullets: string[] = [];
+  const otherLines: string[] = [];
+  for (const line of cleaned.split("\n")) {
+    const t = line.trim();
+    if (!t) {
+      otherLines.push("");
+      continue;
+    }
+    const m = t.match(CATEGORY_MATCH);
+    if (m) {
+      categoryBullets.push(`- **${m[1].trim()} (${m[2]}/100)**: ${m[3].trim()}`);
+    } else {
+      if (t === "Recommended jobs" || t.startsWith("Recommended jobs")) {
+        otherLines.push("## Recommended jobs");
+      } else {
+        otherLines.push(line);
+      }
+    }
+  }
+
+  if (categoryBullets.length > 0) {
+    let section = "## Your strongest fields\n\n" + categoryBullets.join("\n");
+    const rest = otherLines.join("\n").trim();
+    if (rest) section += "\n\n" + rest;
+    return section;
+  }
+
+  if (/##|\*\*|\[.+\]\(.+\)/.test(cleaned)) return cleaned;
+
+  return cleaned
+    .split(/\n\n+/)
+    .map((block) => {
+      const line = block.trim();
+      if (!line) return "";
+      if (line.length < 60 && line.endsWith(":")) return `## ${line.slice(0, -1)}`;
+      return line;
+    })
+    .filter(Boolean)
+    .join("\n\n");
+}
 
 function toSkillWithWeight(x: unknown): SkillWithWeight {
   if (x && typeof x === "object" && "skill" in x && typeof (x as SkillWithWeight).skill === "string") {
@@ -174,33 +247,50 @@ export function ResumeAnalysisPage() {
     if (!safe) return;
     setSummaryError(null);
     setSummaryLoading(true);
+    setResult((prev) => (prev ? { ...prev, summary: "" } : prev));
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), SUMMARIZE_TIMEOUT_MS);
     try {
-      // Send only data needed for prompt to avoid 413 Payload Too Large
-      const topMatches = safe.matches.slice(0, 5).map((m) => ({
-        job: { title: m.job?.title, company: m.job?.company },
-        matched_skills: m.matched_skills,
-        match_count: m.match_count,
-      }));
+      // Send data with job URLs for markdown links; dedupe by (title, company)
+      const seen = new Set<string>();
+      const topMatches: { job: { title?: string; company?: string; url?: string }; matched_skills: string[]; match_count: number }[] = [];
+      for (const m of safe.matches) {
+        const key = `${m.job?.title ?? ""}|${m.job?.company ?? ""}`;
+        if (!seen.has(key) && key !== "|") {
+          seen.add(key);
+          topMatches.push({
+            job: { title: m.job?.title, company: m.job?.company, url: m.job?.url },
+            matched_skills: m.matched_skills,
+            match_count: m.match_count,
+          });
+          if (topMatches.length >= 5) break;
+        }
+      }
       const topCategories = [...safe.by_category]
         .sort((a, b) => (b.match_score ?? 0) - (a.match_score ?? 0))
-        .slice(0, 3)
+        .slice(0, 5)
         .map((c) => ({
           category: c.category,
           match_score: c.match_score,
           matching_skills: c.matching_skills?.slice(0, 8) ?? [],
           skills_to_add: c.skills_to_add?.slice(0, 5) ?? [],
         }));
-      const { summary } = await api.resumeSummarize(
+      const summary = await api.resumeSummarizeStream(
         {
           extracted_skills: safe.extracted_skills,
           matches: topMatches,
           by_category: topCategories,
         },
+        (chunk) => {
+          setResult((prev) => (prev ? { ...prev, summary: (prev.summary ?? "") + chunk } : prev));
+        },
         controller.signal,
       );
-      setResult((prev) => (prev ? { ...prev, summary } : prev));
+      const trimmed = summary.trim();
+      setResult((prev) => (prev ? { ...prev, summary: trimmed } : prev));
+      if (!trimmed) {
+        setSummaryError("AI summary unavailable. Ensure Ollama is running and a model is pulled (e.g. ollama pull tinyllama).");
+      }
     } catch (e) {
       if (e instanceof Error) {
         setSummaryError(e.name === "AbortError" ? "Summary timed out. Try again." : e.message);
@@ -301,9 +391,35 @@ export function ResumeAnalysisPage() {
                 AI Summary & Recommendations
               </Typography>
               {safe.summary ? (
-                <Typography variant="body1" component="div" sx={{ whiteSpace: "pre-wrap", lineHeight: 1.7 }}>
-                  {safe.summary}
-                </Typography>
+                <Box
+                  sx={{
+                    "& h1": { fontSize: "1.25rem", fontWeight: 600, mt: 2, mb: 1 },
+                    "& h2": { fontSize: "1.1rem", fontWeight: 600, mt: 2, mb: 1 },
+                    "& h3": { fontSize: "1rem", fontWeight: 600, mt: 1.5, mb: 0.5 },
+                    "& p": { mb: 1 },
+                    "& ul": { pl: 2, mb: 1 },
+                    "& ol": { pl: 2, mb: 1 },
+                    "& li": { mb: 0.25 },
+                    "& strong": { fontWeight: 600 },
+                    "& a": { color: "primary.main", textDecoration: "underline" },
+                    "& code": { fontFamily: "monospace", bgcolor: "action.hover", px: 0.5, borderRadius: 0.5 },
+                    "& pre": { overflow: "auto", p: 1.5, borderRadius: 1, bgcolor: "action.hover" },
+                    lineHeight: 1.7,
+                  }}
+                >
+                  <ReactMarkdown
+                    remarkPlugins={[remarkGfm]}
+                    components={{
+                      a: ({ href, children }) => (
+                        <a href={href} target="_blank" rel="noopener noreferrer">
+                          {children}
+                        </a>
+                      ),
+                    }}
+                  >
+                    {formatSummaryForMarkdown(safe.summary)}
+                  </ReactMarkdown>
+                </Box>
               ) : (
                 <Box>
                   <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>

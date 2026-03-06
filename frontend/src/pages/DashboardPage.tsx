@@ -12,6 +12,8 @@ import InputLabel from "@mui/material/InputLabel";
 import Select from "@mui/material/Select";
 import type { SelectChangeEvent } from "@mui/material/Select";
 import MenuItem from "@mui/material/MenuItem";
+import FormControlLabel from "@mui/material/FormControlLabel";
+import Switch from "@mui/material/Switch";
 import CircularProgress from "@mui/material/CircularProgress";
 import { api } from "../api/client";
 import type { AnalyticsData } from "../api/types";
@@ -39,6 +41,7 @@ export function DashboardPage() {
   const [loading, setLoading] = useState(true);
   const [seniorities, setSeniorities] = useState<string[]>([]);
   const [selectedSeniority, setSelectedSeniority] = useState("");
+  const [uniqueOffers, setUniqueOffers] = useState(false);
 
   useEffect(() => {
     api.listSeniorities().then(setSeniorities).catch(() => {});
@@ -46,10 +49,13 @@ export function DashboardPage() {
 
   useEffect(() => {
     setLoading(true);
-    api.analytics({ seniority: selectedSeniority || undefined })
+    api.analytics({
+      seniority: selectedSeniority || undefined,
+      group_duplicates: uniqueOffers,
+    })
       .then(setData)
       .finally(() => setLoading(false));
-  }, [selectedSeniority]);
+  }, [selectedSeniority, uniqueOffers]);
 
   if (loading) {
     return (
@@ -77,8 +83,18 @@ export function DashboardPage() {
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
-      {/* Filter */}
-      <Box sx={{ display: "flex", justifyContent: "flex-end" }}>
+      {/* Filters */}
+      <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 2, justifyContent: "flex-end" }}>
+        <FormControlLabel
+          control={
+            <Switch
+              checked={uniqueOffers}
+              onChange={(e) => setUniqueOffers(e.target.checked)}
+              color="primary"
+            />
+          }
+          label="Unique offers only (deduplicate by company + title)"
+        />
         <FormControl size="small" sx={{ minWidth: 180 }}>
           <InputLabel>Filter by Seniority</InputLabel>
           <Select

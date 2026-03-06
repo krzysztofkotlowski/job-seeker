@@ -269,10 +269,28 @@ class JustJoinParser(BaseParser):
         if emp_types and salary:
             salary.type = emp_types[0]
 
-        skills = self._extract_skills_from_html(soup)
+        skills_required: list[str] = []
+        skills_nice: list[str] = []
+        jsonld_skills = jsonld.get("skills")
+        if jsonld_skills:
+            if isinstance(jsonld_skills, str) and jsonld_skills.strip():
+                skills_required = [s.strip() for s in jsonld_skills.split(",") if s.strip() and len(s.strip()) < 50]
+            elif isinstance(jsonld_skills, list):
+                for s in jsonld_skills:
+                    if isinstance(s, str) and s.strip() and len(s.strip()) < 50:
+                        skills_required.append(s.strip())
+                    elif isinstance(s, dict) and s.get("name"):
+                        skills_required.append(str(s["name"]).strip())
+        if not skills_required and not skills_nice:
+            skills_required, skills_nice = self._extract_skills_with_sections_from_html(soup)
+            if not skills_required:
+                skills_required = self._extract_skills_from_html(soup)
+
         work_type_raw = jsonld.get("jobLocationType", "")
         seniority = self._extract_seniority_from_html(soup)
         category = self._extract_category_from_url(url)
+
+        description = jsonld.get("description", "") or self._extract_description_from_html(soup)
 
         return JobBase(
             url=url,
@@ -281,12 +299,12 @@ class JustJoinParser(BaseParser):
             company=company,
             location=locations,
             salary=salary,
-            skills_required=skills,
-            skills_nice_to_have=[],
+            skills_required=skills_required,
+            skills_nice_to_have=skills_nice,
             seniority=seniority,
             work_type=self._normalize_work_type(work_type_raw),
             employment_types=emp_types,
-            description=jsonld.get("description", ""),
+            description=description,
             category=category,
             date_published=jsonld.get("datePosted", "").split("T")[0] if jsonld.get("datePosted") else None,
             date_expires=jsonld.get("validThrough", "").split("T")[0] if jsonld.get("validThrough") else None,
@@ -301,6 +319,57 @@ class JustJoinParser(BaseParser):
             if name and len(name) < 50 and name not in skip:
                 skills.append(name)
         return skills
+
+    @staticmethod
+    def _extract_skills_with_sections_from_html(soup: BeautifulSoup) -> tuple[list[str], list[str]]:
+        """Extract required and nice-to-have skills by scanning for section headings."""
+        required: list[str] = []
+        nice_to_have: list[str] = []
+        skip = {"Tech stack", "Office location", "Job description", "Apply", "Save"}
+        required_keywords = ("required", "obowiązkowe", "must have", "wymagane")
+        nice_keywords = ("nice to have", "mile widziane", "optional", "opcjonalne")
+
+        for heading in soup.find_all(["h2", "h3", "h4"]):
+            text = heading.get_text(strip=True).lower()
+            current_list: list[str] | None = None
+            if any(kw in text for kw in required_keywords):
+                current_list = required
+            elif any(kw in text for kw in nice_keywords):
+                current_list = nice_to_have
+
+            if current_list is not None:
+                sibling = heading.find_next_sibling()
+                while sibling and sibling.name in ("ul", "ol", "div"):
+                    for li in sibling.find_all("li"):
+                        skill = li.get_text(strip=True)
+                        if skill and len(skill) < 50 and skill not in skip:
+                            if skill not in current_list:
+                                current_list.append(skill)
+                    sibling = sibling.find_next_sibling()
+                    if sibling and sibling.name in ("h2", "h3", "h4"):
+                        break
+
+        if not required and not nice_to_have:
+            fallback = JustJoinParser._extract_skills_from_html(soup)
+            return (fallback, [])
+        return (required, nice_to_have)
+
+    @staticmethod
+    def _extract_description_from_html(soup: BeautifulSoup) -> str:
+        """Extract job description from meta or content containers."""
+        meta = soup.find("meta", attrs={"name": "description"})
+        if meta and meta.get("content"):
+            return (meta.get("content") or "").strip()
+        for sel in ["[data-testid='offer-description']", ".offer-description", "[class*='description']"]:
+            try:
+                el = soup.select_one(sel)
+                if el:
+                    text = el.get_text(separator="\n", strip=True)
+                    if text and len(text) > 50:
+                        return text
+            except Exception:
+                pass
+        return ""
 
     @staticmethod
     def _extract_seniority_from_html(soup: BeautifulSoup) -> str | None:
@@ -378,7 +447,10 @@ class JustJoinParser(BaseParser):
                 company = a_tag.get_text(strip=True)
                 break
 
-        skills = self._extract_skills_from_html(soup)
+        skills_required, skills_nice = self._extract_skills_with_sections_from_html(soup)
+        if not skills_required:
+            skills_required = self._extract_skills_from_html(soup)
+        description = self._extract_description_from_html(soup)
 
         return JobBase(
             url=url,
@@ -387,12 +459,12 @@ class JustJoinParser(BaseParser):
             company=company,
             location=[],
             salary=None,
-            skills_required=skills,
-            skills_nice_to_have=[],
+            skills_required=skills_required,
+            skills_nice_to_have=skills_nice,
             seniority=None,
             work_type=None,
             employment_types=[],
-            description="",
+            description=description,
             category=self._extract_category_from_url(url),
         )
 

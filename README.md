@@ -12,7 +12,7 @@ Track job offers from **JustJoin.it** and **NoFluffJobs**, with skills analytics
 - **Analytics / dashboard** — Top skills, salary stats, charts (Recharts).
 - **Skills** — Detected skills per job; summary and match endpoints.
 - **Backup** — Download database as `.sql` (PostgreSQL `pg_dump`).
-- **Resume analysis** — Upload PDF, extract skills, compare to positions with match score and bar charts. Optional LLM summary (Ollama) for AI-generated career advice.
+- **Resume analysis** — Upload PDF, extract skills, compare to positions with match score and bar charts. Optional LLM summary (Ollama) for AI-generated career advice. RAG (vector search via Elasticsearch) enriches matches with semantic retrieval when enabled.
 - **Keycloak auth** — Optional login; protected endpoints (import, resume, backup) when `KEYCLOAK_URL` is set.
 - **User & resume history** — Authenticated users get resume analyses persisted with extracted keywords.
 - **Dark mode** — UI theme toggle.
@@ -26,7 +26,7 @@ Track job offers from **JustJoin.it** and **NoFluffJobs**, with skills analytics
 |----------|--------|
 | Backend  | FastAPI 2.x, SQLAlchemy 2, Celery (eager by default, no Redis required for dev), PostgreSQL |
 | Frontend | React 19, TypeScript, Vite 7, MUI, Tailwind CSS, Recharts, React Router |
-| Run      | Docker Compose (Postgres + backend + frontend + Keycloak + Ollama) |
+| Run      | Docker Compose (Postgres + backend + frontend + Keycloak + Ollama + Elasticsearch) |
 
 ---
 
@@ -48,13 +48,23 @@ Default DB: `postgresql://jobseeker:jobseeker@postgres:5432/jobseeker` (inside C
 
 **Keycloak setup:** See [docs/KEYCLOAK_SETUP.md](docs/KEYCLOAK_SETUP.md). When `KEYCLOAK_URL` is set, import, resume, and backup require login.
 
-**LLM summary (optional):** After resume analysis, users can click "Generate AI summary" to get an AI-generated career advice. Requires Ollama running with a model. The `./scripts/test-and-build.sh` script pulls the model automatically. For manual `docker compose up`, run:
+**LLM summary (optional):** After resume analysis, users can click "Generate AI summary" to get AI-generated career advice. The summary streams as the model generates it and is rendered as markdown with clickable job links. Requires Ollama running with a model. The `./scripts/test-and-build.sh` script pulls the model automatically. For manual `docker compose up`, run:
 
 ```bash
-docker compose exec ollama ollama pull tinyllama
+docker compose exec ollama ollama pull llama3.2:1b
 ```
 
-Default model is `tinyllama` (1.1B, smallest working). For better quality, use `phi3:mini` or `llama3.2:3b` and set `LLM_MODEL` accordingly. On small containers, summary may take 60-90s; increase `LLM_SUMMARIZE_TIMEOUT` if needed. To disable summaries, unset `LLM_URL` in the backend environment.
+Default model is `llama3.2:1b` (~1.3GB, runs on small machines). For better quality if you have 4GB+ RAM: `llama3.2:3b`. Fallback: `tinyllama`. Set `LLM_MODEL` in backend env if needed. Optional: create a custom model with the project Modelfile for improved prompt adherence:
+
+```bash
+# From project root
+ollama create jobseeker-advisor -f Modelfile
+# Then set LLM_MODEL=jobseeker-advisor in backend env
+```
+
+On small containers, summary may take 60-90s; increase `LLM_SUMMARIZE_TIMEOUT` if needed. To disable summaries, unset `LLM_URL` in the backend environment.
+
+**RAG (vector search):** When `RAG_ENABLED=true` and Elasticsearch is running, resume analysis uses semantic search to find additional job matches. After importing jobs, run `POST /api/v1/jobs/sync-embeddings` to index jobs for RAG. Pull the embedding model: `docker compose exec ollama ollama pull nomic-embed-text`.
 
 ### Local development
 
@@ -98,11 +108,11 @@ Runs backend + frontend tests, then `docker compose up --build -d`, then pulls t
 
 | Area     | Base path           | Notes |
 |----------|---------------------|--------|
-| Jobs     | `/api/v1/jobs`      | CRUD, list with filters, parse URL, analytics, categories, seniorities, locations, top skills, duplicate check, recalculate salaries |
+| Jobs     | `/api/v1/jobs`      | CRUD, list with filters, parse URL, analytics, categories, seniorities, locations, top skills, duplicate check, recalculate salaries, sync-embeddings (RAG) |
 | Skills   | `/api/v1/skills`    | Summary, detected, match |
 | Import   | `/api/v1/import`    | Status, start (all or per source), cancel |
 | Backup   | `/api/v1/backup`    | POST create → download .sql |
-| Health   | `/api/v1/health`    | `{"status":"ok"}` |
+| Health   | `/api/v1/health`    | `{"status":"ok", "llm_available": bool}` |
 
 OpenAPI: `/api/v1/docs`, `/api/v1/redoc`, `/api/v1/openapi.json`.
 
@@ -170,9 +180,14 @@ job-seeker/
 | `DATABASE_URL`     | PostgreSQL URL (required for backend). |
 | `ENRICH_ON_IMPORT` | When set (`1`, `true`, `yes`), NoFluffJobs import fetches each job page for description and nice-to-have skills. Slower but richer data. |
 | `LLM_URL`          | Ollama API URL (e.g. `http://ollama:11434`). If unset, resume summaries are disabled. |
-| `LLM_MODEL`             | Model name for summarization (default: `tinyllama`). Use `phi3:mini` or `llama3.2:3b` for better quality. |
+| `LLM_MODEL`             | Model name for summarization (default: `tinyllama`). Use `llama3.2:1b`, `phi3:mini`, or `llama3.2:3b` for better quality. |
 | `LLM_TIMEOUT`           | Timeout in seconds for LLM requests (default: 30). |
 | `LLM_SUMMARIZE_TIMEOUT` | Timeout for on-demand summarize (default: 90). Increase on small containers. |
+| `LLM_MAX_OUTPUT_TOKENS` | Max tokens for summary output (default: 5120). Reduces cut-off with small models. |
+| `ELASTICSEARCH_URL`     | Elasticsearch URL for RAG (default: `http://localhost:9200`). |
+| `EMBED_MODEL`           | Ollama embedding model (default: `nomic-embed-text`). Run `ollama pull nomic-embed-text`. |
+| `EMBED_DIMS`            | Embedding dimensions (default: 768 for nomic-embed-text). |
+| `RAG_ENABLED`           | When `true`, resume analysis merges keyword + semantic matches. |
 
 Celery runs in eager mode by default so imports work without Redis; optional Redis can be added for real background workers.
 

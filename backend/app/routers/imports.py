@@ -1,8 +1,10 @@
 import logging
+from typing import Annotated
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 
 from app import import_engine
+from app.auth import require_auth
 from app.celery_app import run_import_all, run_import_source
 
 router = APIRouter()
@@ -20,7 +22,7 @@ def import_status():
 
 
 @router.post("/start")
-def import_start():
+def import_start(_user: Annotated[dict | None, Depends(require_auth)] = None):
     if import_engine.is_running():
         return {"message": "Import already running", "running": True}
     run_import_all.delay()
@@ -29,7 +31,7 @@ def import_start():
 
 
 @router.post("/start/{source}")
-def import_start_source(source: str):
+def import_start_source(source: str, _user: Annotated[dict | None, Depends(require_auth)] = None):
     if source not in VALID_SOURCES:
         raise HTTPException(400, f"Invalid source. Must be one of: {', '.join(VALID_SOURCES)}")
     if import_engine.is_source_running(source):
@@ -40,6 +42,6 @@ def import_start_source(source: str):
 
 
 @router.post("/cancel")
-def import_cancel():
+def import_cancel(_user: Annotated[dict | None, Depends(require_auth)] = None):
     import_engine.cancel_all()
     return {"message": "Cancel requested"}

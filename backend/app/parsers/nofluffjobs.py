@@ -79,13 +79,31 @@ class NoFluffJobsParser(BaseParser):
                 type=emp_type_label,
             )
 
-        skills = []
+        skills_required: list[str] = []
+        skills_nice: list[str] = []
         tiles = posting.get("tiles", {})
+        nice_to_have_types = ("nice_to_have", "optional", "niceToHave")
         for tile in tiles.get("values", []):
-            if tile.get("type") == "requirement":
-                val = tile.get("value", "")
-                if val and val not in skills:
-                    skills.append(val)
+            t = tile.get("type", "")
+            val = tile.get("value", "")
+            if not val or len(val) >= 50:
+                continue
+            if t == "requirement":
+                if val not in skills_required:
+                    skills_required.append(val)
+            elif t in nice_to_have_types:
+                if val not in skills_nice:
+                    skills_nice.append(val)
+
+        description = (
+            posting.get("description")
+            or posting.get("offerDescription")
+            or posting.get("body")
+            or posting.get("content")
+            or ""
+        )
+        if description and not isinstance(description, str):
+            description = str(description)
 
         seniority_list = posting.get("seniority", [])
         seniority = seniority_list[0].capitalize() if seniority_list else None
@@ -109,12 +127,12 @@ class NoFluffJobsParser(BaseParser):
             company=company,
             location=locations,
             salary=salary,
-            skills_required=skills,
-            skills_nice_to_have=[],
+            skills_required=skills_required,
+            skills_nice_to_have=skills_nice,
             seniority=seniority,
             work_type=work_type,
             employment_types=emp_types,
-            description="",
+            description=description or "",
             category=category,
             date_published=date_published,
             date_expires=None,

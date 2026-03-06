@@ -33,11 +33,18 @@ const SOURCE_STYLE: Record<string, { color: "success" | "primary"; label: string
   "nofluffjobs.com": { color: "primary", label: "NoFluffJobs" },
 };
 
+type EmbeddingStatus = { available: boolean; indexed: number; total: number; syncing?: boolean } | null;
+
 export function ImportPage() {
   const [status, setStatus] = useState<ImportStatus | null>(null);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [embeddingStatus, setEmbeddingStatus] = useState<EmbeddingStatus>(null);
+  const [embeddingSyncing, setEmbeddingSyncing] = useState(false);
+  const [embeddingProgress, setEmbeddingProgress] = useState({ indexed: 0, total: 0 });
+  const [embeddingError, setEmbeddingError] = useState<string | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const autoResumeDoneRef = useRef(false);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -46,6 +53,60 @@ export function ImportPage() {
   }, []);
 
   useEffect(() => { fetchStatus(); }, [fetchStatus]);
+
+  const fetchEmbeddingStatus = useCallback(async () => {
+    try {
+      const s = await api.embeddingStatus();
+      setEmbeddingStatus(s);
+    } catch {
+      setEmbeddingStatus({ available: false, indexed: 0, total: 0, syncing: false });
+    }
+  }, []);
+
+  useEffect(() => {
+    fetchEmbeddingStatus();
+  }, [fetchEmbeddingStatus]);
+
+  // Poll embedding status when sync might be in progress (startup or indexed < total)
+  useEffect(() => {
+    if (!embeddingStatus?.available) return;
+    const mightBeSyncing = embeddingStatus.syncing || (embeddingStatus.total > 0 && embeddingStatus.indexed < embeddingStatus.total);
+    if (!mightBeSyncing) return;
+    const id = setInterval(fetchEmbeddingStatus, 3000);
+    return () => clearInterval(id);
+  }, [embeddingStatus, fetchEmbeddingStatus]);
+
+  // If any task is resumable (error/cancelled with pending), auto-start import once
+  useEffect(() => {
+    if (!status || autoResumeDoneRef.current || status.running) return;
+    const resumable = status.tasks.some(
+      (t) => (t.status === "error" || t.status === "cancelled") && (t.pending ?? 0) > 0,
+    );
+    if (!resumable) return;
+    autoResumeDoneRef.current = true;
+    setStarting(true);
+    setError(null);
+    setStatus((prev) =>
+      prev
+        ? {
+            ...prev,
+            running: true,
+            tasks: prev.tasks.map((t) =>
+              t.status === "error" || t.status === "cancelled"
+                ? { ...t, status: "collecting" as const }
+                : t,
+            ),
+          }
+        : prev,
+    );
+    api
+      .importStart()
+      .then(() => {
+        if (!intervalRef.current) intervalRef.current = setInterval(fetchStatus, 2000);
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : "Auto-resume failed"))
+      .finally(() => setStarting(false));
+  }, [status, fetchStatus]);
 
   useEffect(() => {
     const isActive =
@@ -126,6 +187,22 @@ export function ImportPage() {
     } catch { /* ignore */ }
   };
 
+  const handleSyncEmbeddings = async () => {
+    setEmbeddingSyncing(true);
+    setEmbeddingError(null);
+    setEmbeddingProgress({ indexed: 0, total: 0 });
+    try {
+      await api.syncEmbeddingsStream(
+        (indexed, total) => setEmbeddingProgress({ indexed, total }),
+      );
+      await fetchEmbeddingStatus();
+    } catch (e) {
+      setEmbeddingError(e instanceof Error ? e.message : "Embedding sync failed");
+    } finally {
+      setEmbeddingSyncing(false);
+    }
+  };
+
   const isRunning = status?.running ?? false;
 
   return (
@@ -156,6 +233,61 @@ export function ImportPage() {
             <TaskCard key={task.source} task={task} onStart={() => handleStartSource(task.source)} />
           ))}
         </Box>
+      </Paper>
+
+      <Paper sx={{ p: 3 }}>
+        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 2 }}>
+          <Box>
+            <Typography variant="h6" fontWeight={600}>Vector Index (RAG)</Typography>
+            <Typography variant="body2" color="text.secondary">
+              Index job offers for semantic search. Enables AI resume summaries to find relevant jobs by meaning, not
+              just keywords. Run after importing jobs. May take several minutes for large datasets.
+            </Typography>
+          </Box>
+          {embeddingStatus?.available && (
+            <Button
+              variant="contained"
+              color="secondary"
+              size="medium"
+              onClick={handleSyncEmbeddings}
+              disabled={embeddingSyncing || embeddingStatus.syncing}
+              sx={{ minWidth: 140, fontWeight: 600 }}
+            >
+              {embeddingSyncing || embeddingStatus.syncing ? "Syncing..." : "Index for RAG"}
+            </Button>
+          )}
+        </Box>
+        {embeddingError && <Alert severity="error" sx={{ mb: 2 }}>{embeddingError}</Alert>}
+        {embeddingStatus?.available && (
+          <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+            <Typography variant="body2" color="text.secondary">
+              {embeddingStatus.indexed.toLocaleString()} / {embeddingStatus.total.toLocaleString()} indexed
+            </Typography>
+          </Box>
+        )}
+        {(embeddingSyncing || embeddingStatus?.syncing) && (
+          <Box sx={{ mt: 2 }}>
+            <LinearProgress
+              variant="determinate"
+              value={
+                (embeddingSyncing && embeddingProgress.total > 0)
+                  ? Math.round((embeddingProgress.indexed / embeddingProgress.total) * 100)
+                  : embeddingStatus && embeddingStatus.total > 0
+                    ? Math.round((embeddingStatus.indexed / embeddingStatus.total) * 100)
+                    : 0
+              }
+              sx={{ height: 8, borderRadius: 4, mb: 0.5 }}
+            />
+            <Typography variant="caption" color="text.secondary">
+              {(embeddingSyncing && embeddingProgress.total > 0 ? embeddingProgress.indexed : embeddingStatus?.indexed ?? 0).toLocaleString()} / {(embeddingSyncing && embeddingProgress.total > 0 ? embeddingProgress.total : embeddingStatus?.total ?? 0).toLocaleString()}
+            </Typography>
+          </Box>
+        )}
+        {!embeddingStatus?.available && embeddingStatus !== null && (
+          <Alert severity="info" sx={{ mt: 1 }}>
+            Elasticsearch is not available. RAG features are disabled.
+          </Alert>
+        )}
       </Paper>
     </Box>
   );

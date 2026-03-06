@@ -1,18 +1,26 @@
 """Resume analysis: upload PDF, extract keywords (system skills only), match by job/category."""
 
+import json
 import logging
 import uuid
 from typing import Annotated
 
 from fastapi import APIRouter, Body, File, HTTPException, UploadFile, Depends
+from fastapi.responses import StreamingResponse
 from sqlalchemy.orm import Session
 
 from app.auth import get_current_user_optional, require_auth
 from app.database import get_db
 from app.models.tables import ResumeRow, UserRow
-from app.services.llm_service import summarize_resume_match
+from app.services.llm_service import summarize_resume_match, summarize_resume_match_stream
 from app.services.resume_keywords import extract_keywords_from_pdf
-from app.services.resume_service import build_by_category, match_jobs_to_skills
+from app.services.resume_service import (
+    build_by_category,
+    match_jobs_to_skills,
+    merge_keyword_and_semantic_matches,
+    retrieve_semantic_matches,
+    RAG_ENABLED,
+)
 from app.services.skill_detector import _get_known_skills
 from app.services.user_service import get_or_create_user
 
@@ -95,8 +103,17 @@ async def analyze_resume(
                 "message": "No skills from the PDF matched our system (skills from scraped offers).",
             }
 
-        matches = match_jobs_to_skills(db, extracted_skills)
+        keyword_matches = match_jobs_to_skills(db, extracted_skills)
         by_category = build_by_category(db, extracted_skills)
+
+        # RAG: merge semantic matches when enabled
+        if RAG_ENABLED:
+            semantic_matches = retrieve_semantic_matches(db, extracted_skills, top_k=10)
+            matches = merge_keyword_and_semantic_matches(
+                keyword_matches, semantic_matches, max_total=8
+            )
+        else:
+            matches = keyword_matches
 
         # Persist when user is authenticated
         if user:
@@ -153,3 +170,33 @@ async def summarize_match(
             "AI summary unavailable. Ensure Ollama is running with a model (e.g. ollama pull tinyllama).",
         )
     return {"summary": summary}
+
+
+@router.post("/summarize/stream")
+async def summarize_match_stream(
+    body: dict = Body(
+        ...,
+        examples=[{
+            "extracted_skills": ["Python", "FastAPI"],
+            "matches": [{"job": {"title": "Backend Dev", "company": "Acme", "url": "https://example.com/job/1"}, "matched_skills": ["Python"], "match_count": 1}],
+            "by_category": [{"category": "Backend", "match_score": 80, "matching_skills": [], "skills_to_add": []}],
+        }],
+    ),
+):
+    """
+    Stream AI summary as Server-Sent Events. Each event is a JSON object with a "chunk" field.
+    """
+    extracted_skills = body.get("extracted_skills") or []
+    matches = body.get("matches") or []
+    by_category = body.get("by_category") or []
+
+    async def generate():
+        async for chunk in summarize_resume_match_stream(extracted_skills, matches, by_category):
+            payload = json.dumps({"chunk": chunk})
+            yield f"data: {payload}\n\n"
+
+    return StreamingResponse(
+        generate(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )

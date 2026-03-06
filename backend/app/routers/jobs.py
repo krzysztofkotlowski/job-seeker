@@ -106,7 +106,8 @@ def list_jobs(
     source: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
     seniority: Optional[str] = Query(None),
-    skill: Optional[str] = Query(None),
+    skill: Optional[str] = Query(None, description="Single skill (deprecated, use skills)"),
+    skills: Optional[str] = Query(None, description="Comma-separated skills; job must have ALL"),
     search: Optional[str] = Query(None),
     is_reposted: Optional[bool] = Query(None),
     work_type: Optional[str] = Query(None),
@@ -136,11 +137,12 @@ def list_jobs(
         q = q.filter(JobRow.work_type.ilike(f"%{work_type}%"))
     if location:
         q = q.filter(JobRow.location.any(location))
-    if skill:
+    skill_list = [s.strip() for s in (skills or skill or "").split(",") if s.strip()]
+    for s in skill_list:
         q = q.filter(
             or_(
-                JobRow.skills_required.any(skill),
-                JobRow.skills_nice_to_have.any(skill),
+                JobRow.skills_required.any(s),
+                JobRow.skills_nice_to_have.any(s),
             )
         )
     if search:
@@ -327,7 +329,8 @@ def analytics(
     seniority: Optional[str] = Query(None),
     source: Optional[str] = Query(None),
     category: Optional[str] = Query(None),
-    skill: Optional[str] = Query(None),
+    skill: Optional[str] = Query(None, description="Single skill (deprecated, use skills)"),
+    skills: Optional[str] = Query(None, description="Comma-separated skills; job must have ALL"),
     search: Optional[str] = Query(None),
     is_reposted: Optional[bool] = Query(None),
     work_type: Optional[str] = Query(None),
@@ -352,11 +355,12 @@ def analytics(
             q = q.filter(JobRow.work_type.ilike(f"%{work_type}%"))
         if location:
             q = q.filter(JobRow.location.any(location))
-        if skill:
+        skill_list = [s.strip() for s in (skills or skill or "").split(",") if s.strip()]
+        for s in skill_list:
             q = q.filter(
                 or_(
-                    JobRow.skills_required.any(skill),
-                    JobRow.skills_nice_to_have.any(skill),
+                    JobRow.skills_required.any(s),
+                    JobRow.skills_nice_to_have.any(s),
                 )
             )
         if search:
@@ -375,24 +379,139 @@ def analytics(
         return q
 
     base_q = _base()
+    title_l = func.lower(JobRow.title)
+    group_key = tuple_(JobRow.company, title_l)
 
     if group_duplicates:
-        title_l = func.lower(JobRow.title)
-        group_key = tuple_(JobRow.company, title_l)
-
-        total = base_q.with_entities(func.count(func.distinct(group_key))).scalar() or 0
-
+        # One row per (company, title) with a representative status; then count by status.
+        # Subquery avoids COUNT(DISTINCT (a,b)) which can be unreliable across DBs.
+        status_subq = (
+            base_q.with_entities(
+                JobRow.company,
+                title_l,
+                func.max(JobRow.status).label("status"),
+            )
+            .group_by(JobRow.company, title_l)
+            .subquery()
+        )
+        total = db.query(func.count()).select_from(status_subq).scalar() or 0
         status_rows = (
-            base_q.with_entities(JobRow.status, func.count(func.distinct(group_key)))
-            .group_by(JobRow.status)
+            db.query(status_subq.c.status, func.count())
+            .group_by(status_subq.c.status)
             .all()
         )
         by_status = {r[0]: r[1] for r in status_rows}
 
-        saved_q = base_q.filter(JobRow.saved.is_(True))
-        saved_count = (
-            saved_q.with_entities(func.count(func.distinct(group_key))).scalar() or 0
+        saved_subq = (
+            base_q.filter(JobRow.saved.is_(True))
+            .with_entities(JobRow.company, title_l)
+            .distinct()
+            .subquery()
         )
+        saved_count = db.query(func.count()).select_from(saved_subq).scalar() or 0
+
+        source_rows = (
+            base_q.with_entities(JobRow.source, func.count(func.distinct(group_key)))
+            .group_by(JobRow.source).all()
+        )
+        by_source = {r[0]: r[1] for r in source_rows}
+
+        cat_rows = (
+            base_q.with_entities(JobRow.category, func.count(func.distinct(group_key)))
+            .filter(JobRow.category.isnot(None), JobRow.category != "")
+            .group_by(JobRow.category)
+            .order_by(func.count(func.distinct(group_key)).desc()).limit(20).all()
+        )
+        by_category = [{"category": r[0], "count": r[1]} for r in cat_rows]
+
+        sen_rows = (
+            base_q.with_entities(JobRow.seniority, func.count(func.distinct(group_key)))
+            .filter(
+                JobRow.seniority.isnot(None),
+                JobRow.seniority != "",
+                JobRow.seniority.notin_(SENIORITY_BLACKLIST),
+            )
+            .group_by(JobRow.seniority)
+            .order_by(func.count(func.distinct(group_key)).desc()).all()
+        )
+        by_seniority = [{"seniority": r[0], "count": r[1]} for r in sen_rows]
+
+        wt_rows = (
+            base_q.with_entities(JobRow.work_type, func.count(func.distinct(group_key)))
+            .filter(JobRow.work_type.isnot(None), JobRow.work_type != "")
+            .group_by(JobRow.work_type)
+            .order_by(func.count(func.distinct(group_key)).desc()).all()
+        )
+        by_work_type = [{"work_type": r[0], "count": r[1]} for r in wt_rows]
+
+        reposted_count = (
+            base_q.filter(JobRow.is_reposted.is_(True))
+            .with_entities(func.count(func.distinct(group_key))).scalar() or 0
+        )
+
+        company_rows = (
+            base_q.with_entities(JobRow.company, func.count(func.distinct(group_key)))
+            .group_by(JobRow.company)
+            .order_by(func.count(func.distinct(group_key)).desc()).limit(15).all()
+        )
+        top_companies = [{"company": r[0], "count": r[1]} for r in company_rows]
+
+        # Salary: one avg per (company, title) then average across groups
+        sal_subq = (
+            base_q.filter(JobRow.salary_min_pln.isnot(None))
+            .with_entities(
+                group_key,
+                func.avg(JobRow.salary_min_pln).label("am"),
+                func.avg(JobRow.salary_max_pln).label("ax"),
+                func.max(JobRow.category).label("cat"),
+            )
+            .group_by(JobRow.company, title_l)
+            .subquery()
+        )
+        avg_min = db.query(func.avg(sal_subq.c.am)).scalar()
+        avg_max = db.query(func.avg(sal_subq.c.ax)).scalar()
+        sal_by_cat_q = (
+            db.query(
+                sal_subq.c.cat,
+                func.round(cast(func.avg(sal_subq.c.am), Numeric), 0),
+                func.round(cast(func.avg(sal_subq.c.ax), Numeric), 0),
+            )
+            .filter(sal_subq.c.cat.isnot(None), sal_subq.c.cat != "")
+            .group_by(sal_subq.c.cat)
+            .order_by(func.avg(sal_subq.c.ax).desc())
+            .limit(15).all()
+        )
+
+        # Timeline: one date per (company, title) = min(date_added), then count by date
+        timeline_subq = (
+            base_q.filter(JobRow.date_added.isnot(None))
+            .with_entities(group_key, func.min(JobRow.date_added).label("d"))
+            .group_by(JobRow.company, title_l)
+            .subquery()
+        )
+        timeline_rows = (
+            db.query(timeline_subq.c.d, func.count())
+            .group_by(timeline_subq.c.d)
+            .order_by(timeline_subq.c.d).all()
+        )
+        added_over_time = [{"date": r[0], "count": r[1]} for r in timeline_rows]
+
+        # Top locations: one row per (company, title) then unnest locations.
+        # Use DISTINCT ON instead of min(id) since PostgreSQL has no min(uuid).
+        id_subq = (
+            base_q.with_entities(JobRow.id)
+            .distinct(JobRow.company, title_l)
+            .order_by(JobRow.company, title_l, JobRow.created_at.desc())
+            .subquery()
+        )
+        loc_rows = (
+            db.query(func.unnest(JobRow.location).label("loc"), func.count())
+            .select_from(JobRow)
+            .join(id_subq, JobRow.id == id_subq.c.id)
+            .group_by("loc")
+            .order_by(func.count().desc()).limit(15).all()
+        )
+        top_locations = [{"location": r[0], "count": r[1]} for r in loc_rows]
     else:
         total = base_q.count()
 
@@ -403,94 +522,92 @@ def analytics(
         )
         by_status = {r[0]: r[1] for r in status_rows}
 
-    source_rows = (
-        base_q.with_entities(JobRow.source, func.count())
-        .group_by(JobRow.source).all()
-    )
-    by_source = {r[0]: r[1] for r in source_rows}
-
-    cat_rows = (
-        base_q.with_entities(JobRow.category, func.count())
-        .filter(JobRow.category.isnot(None), JobRow.category != "")
-        .group_by(JobRow.category)
-        .order_by(func.count().desc()).limit(20).all()
-    )
-    by_category = [{"category": r[0], "count": r[1]} for r in cat_rows]
-
-    sen_rows = (
-        base_q.with_entities(JobRow.seniority, func.count())
-        .filter(
-            JobRow.seniority.isnot(None),
-            JobRow.seniority != "",
-            JobRow.seniority.notin_(SENIORITY_BLACKLIST),
-        )
-        .group_by(JobRow.seniority)
-        .order_by(func.count().desc()).all()
-    )
-    by_seniority = [{"seniority": r[0], "count": r[1]} for r in sen_rows]
-
-    wt_rows = (
-        base_q.with_entities(JobRow.work_type, func.count())
-        .filter(JobRow.work_type.isnot(None), JobRow.work_type != "")
-        .group_by(JobRow.work_type)
-        .order_by(func.count().desc()).all()
-    )
-    by_work_type = [{"work_type": r[0], "count": r[1]} for r in wt_rows]
-
-    avg_min = (
-        base_q.with_entities(func.avg(JobRow.salary_min_pln))
-        .filter(JobRow.salary_min_pln.isnot(None)).scalar()
-    )
-    avg_max = (
-        base_q.with_entities(func.avg(JobRow.salary_max_pln))
-        .filter(JobRow.salary_max_pln.isnot(None)).scalar()
-    )
-
-    sal_by_cat_q = (
-        base_q.with_entities(
-            JobRow.category,
-            func.round(cast(func.avg(JobRow.salary_min_pln), Numeric), 0),
-            func.round(cast(func.avg(JobRow.salary_max_pln), Numeric), 0),
-        )
-        .filter(
-            JobRow.salary_min_pln.isnot(None),
-            JobRow.category.isnot(None),
-            JobRow.category != "",
-        )
-        .group_by(JobRow.category)
-        .order_by(func.avg(JobRow.salary_max_pln).desc())
-        .limit(15).all()
-    )
-
-    timeline_rows = (
-        base_q.with_entities(JobRow.date_added, func.count())
-        .filter(JobRow.date_added.isnot(None))
-        .group_by(JobRow.date_added)
-        .order_by(JobRow.date_added).all()
-    )
-    added_over_time = [{"date": r[0], "count": r[1]} for r in timeline_rows]
-
-    company_rows = (
-        _base().with_entities(JobRow.company, func.count())
-        .group_by(JobRow.company)
-        .order_by(func.count().desc()).limit(15).all()
-    )
-    top_companies = [{"company": r[0], "count": r[1]} for r in company_rows]
-
-    loc_rows = (
-        db.query(func.unnest(JobRow.location).label("loc"), func.count())
-        .select_from(JobRow)
-    )
-    if seniority:
-        loc_rows = loc_rows.filter(JobRow.seniority.ilike(f"%{seniority}%"))
-    loc_rows = loc_rows.group_by("loc").order_by(func.count().desc()).limit(15).all()
-    top_locations = [{"location": r[0], "count": r[1]} for r in loc_rows]
-
-    reposted_count = base_q.filter(
-        JobRow.is_reposted.is_(True)
-    ).count()
-    if not group_duplicates:
         saved_count = base_q.filter(JobRow.saved.is_(True)).count()
+
+        source_rows = (
+            base_q.with_entities(JobRow.source, func.count())
+            .group_by(JobRow.source).all()
+        )
+        by_source = {r[0]: r[1] for r in source_rows}
+
+        cat_rows = (
+            base_q.with_entities(JobRow.category, func.count())
+            .filter(JobRow.category.isnot(None), JobRow.category != "")
+            .group_by(JobRow.category)
+            .order_by(func.count().desc()).limit(20).all()
+        )
+        by_category = [{"category": r[0], "count": r[1]} for r in cat_rows]
+
+        sen_rows = (
+            base_q.with_entities(JobRow.seniority, func.count())
+            .filter(
+                JobRow.seniority.isnot(None),
+                JobRow.seniority != "",
+                JobRow.seniority.notin_(SENIORITY_BLACKLIST),
+            )
+            .group_by(JobRow.seniority)
+            .order_by(func.count().desc()).all()
+        )
+        by_seniority = [{"seniority": r[0], "count": r[1]} for r in sen_rows]
+
+        wt_rows = (
+            base_q.with_entities(JobRow.work_type, func.count())
+            .filter(JobRow.work_type.isnot(None), JobRow.work_type != "")
+            .group_by(JobRow.work_type)
+            .order_by(func.count().desc()).all()
+        )
+        by_work_type = [{"work_type": r[0], "count": r[1]} for r in wt_rows]
+
+        avg_min = (
+            base_q.with_entities(func.avg(JobRow.salary_min_pln))
+            .filter(JobRow.salary_min_pln.isnot(None)).scalar()
+        )
+        avg_max = (
+            base_q.with_entities(func.avg(JobRow.salary_max_pln))
+            .filter(JobRow.salary_max_pln.isnot(None)).scalar()
+        )
+
+        sal_by_cat_q = (
+            base_q.with_entities(
+                JobRow.category,
+                func.round(cast(func.avg(JobRow.salary_min_pln), Numeric), 0),
+                func.round(cast(func.avg(JobRow.salary_max_pln), Numeric), 0),
+            )
+            .filter(
+                JobRow.salary_min_pln.isnot(None),
+                JobRow.category.isnot(None),
+                JobRow.category != "",
+            )
+            .group_by(JobRow.category)
+            .order_by(func.avg(JobRow.salary_max_pln).desc())
+            .limit(15).all()
+        )
+
+        timeline_rows = (
+            base_q.with_entities(JobRow.date_added, func.count())
+            .filter(JobRow.date_added.isnot(None))
+            .group_by(JobRow.date_added)
+            .order_by(JobRow.date_added).all()
+        )
+        added_over_time = [{"date": r[0], "count": r[1]} for r in timeline_rows]
+
+        company_rows = (
+            _base().with_entities(JobRow.company, func.count())
+            .group_by(JobRow.company)
+            .order_by(func.count().desc()).limit(15).all()
+        )
+        top_companies = [{"company": r[0], "count": r[1]} for r in company_rows]
+
+        loc_rows = (
+            db.query(func.unnest(JobRow.location).label("loc"), func.count())
+            .select_from(JobRow)
+        )
+        if seniority:
+            loc_rows = loc_rows.filter(JobRow.seniority.ilike(f"%{seniority}%"))
+        loc_rows = loc_rows.group_by("loc").order_by(func.count().desc()).limit(15).all()
+        top_locations = [{"location": r[0], "count": r[1]} for r in loc_rows]
+
+        reposted_count = base_q.filter(JobRow.is_reposted.is_(True)).count()
 
     return {
         "total_jobs": total,
@@ -513,6 +630,107 @@ def analytics(
         "top_locations": top_locations,
         "reposted_count": reposted_count,
     }
+
+
+@router.post("/sync-embeddings")
+def sync_embeddings(db: Session = Depends(get_db)):
+    """
+    Index all jobs into Elasticsearch for RAG/semantic search.
+    Call after imports to enable resume AI summaries with vector retrieval.
+    """
+    try:
+        from app.services.elasticsearch_service import bulk_index_jobs, is_available
+    except ImportError:
+        raise api_error(
+            "RAG_UNAVAILABLE",
+            "Elasticsearch not configured. Install elasticsearch package.",
+            status_code=503,
+        )
+    if not is_available():
+        raise api_error(
+            "ELASTICSEARCH_UNAVAILABLE",
+            "Elasticsearch is not reachable. Ensure it is running.",
+            status_code=503,
+        )
+    rows = db.query(JobRow).all()
+    indexed = bulk_index_jobs(rows)
+    return {"indexed": indexed, "total": len(rows)}
+
+
+@router.get("/embedding-status")
+def embedding_status(db: Session = Depends(get_db)):
+    """
+    Return embedding index status when Elasticsearch is available.
+    """
+    try:
+        from app.services.elasticsearch_service import (
+            JOBS_INDEX,
+            _get_client,
+            is_available,
+            is_sync_in_progress,
+            ensure_index,
+        )
+    except ImportError:
+        return {"available": False, "indexed": 0, "total": 0, "syncing": False}
+    if not is_available():
+        return {"available": False, "indexed": 0, "total": 0, "syncing": False}
+    try:
+        client = _get_client()
+        if not client or not ensure_index(client):
+            return {"available": True, "indexed": 0, "total": 0, "syncing": is_sync_in_progress()}
+        total = db.query(JobRow).count()
+        count_resp = client.count(index=JOBS_INDEX)
+        indexed = count_resp.get("count", 0)
+        return {"available": True, "indexed": indexed, "total": total, "syncing": is_sync_in_progress()}
+    except Exception:
+        return {"available": True, "indexed": 0, "total": 0, "syncing": is_sync_in_progress()}
+
+
+@router.post("/sync-embeddings/stream")
+def sync_embeddings_stream(db: Session = Depends(get_db)):
+    """
+    Index all jobs into Elasticsearch with SSE progress updates.
+    Streams events: data: {"indexed": N, "total": M}\n\n and final data: {"done": true, "indexed": N, "total": M}\n\n
+    """
+    import json
+
+    from fastapi.responses import StreamingResponse
+
+    try:
+        from app.services.elasticsearch_service import (
+            bulk_index_jobs_stream,
+            is_available,
+            is_sync_in_progress,
+        )
+    except ImportError:
+        raise api_error(
+            "RAG_UNAVAILABLE",
+            "Elasticsearch not configured. Install elasticsearch package.",
+            status_code=503,
+        )
+    if not is_available():
+        raise api_error(
+            "ELASTICSEARCH_UNAVAILABLE",
+            "Elasticsearch is not reachable. Ensure it is running.",
+            status_code=503,
+        )
+    if is_sync_in_progress():
+        raise api_error(
+            "SYNC_IN_PROGRESS",
+            "Embedding sync is already running. Please wait for it to complete.",
+            status_code=409,
+        )
+    rows = db.query(JobRow).all()
+
+    def stream_gen():
+        for event in bulk_index_jobs_stream(rows):
+            yield f"data: {json.dumps(event)}\n\n"
+
+    return StreamingResponse(
+        stream_gen(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 @router.post("/recalculate-salaries")
@@ -564,6 +782,95 @@ def fix_categories(db: Session = Depends(get_db)):
     db.commit()
     log.info("Fixed %d category values", fixed)
     return {"fixed": fixed}
+
+
+@router.post("/enrich")
+def enrich_jobs_batch(
+    ids: Optional[str] = Query(None, description="Comma-separated job UUIDs to enrich"),
+    db: Session = Depends(get_db),
+):
+    """Enrich jobs missing description or skills_nice_to_have by re-parsing their URLs."""
+    if not ids:
+        raise api_error("MISSING_IDS", "Provide ids query param (comma-separated UUIDs)", status_code=400)
+    job_ids = [i.strip() for i in ids.split(",") if i.strip()]
+    if not job_ids:
+        raise api_error("MISSING_IDS", "Provide at least one job ID", status_code=400)
+
+    from app.parsers.detector import detect_and_parse, is_supported_url
+    from app.services.skill_detector import run_detection_batch
+
+    enriched = 0
+    enriched_ids: list = []
+    errors: list[str] = []
+    for job_id in job_ids:
+        row = db.query(JobRow).filter(JobRow.id == job_id).first()
+        if not row:
+            errors.append(f"{job_id}: not found")
+            continue
+        needs = (not row.description or not row.description.strip()) or (
+            not row.skills_nice_to_have or len(row.skills_nice_to_have) == 0
+        )
+        if not needs:
+            continue
+        if not is_supported_url(row.url):
+            errors.append(f"{job_id}: unsupported URL source")
+            continue
+        try:
+            parsed = detect_and_parse(row.url)
+            if parsed.description and (not row.description or not row.description.strip()):
+                row.description = parsed.description
+            if parsed.skills_required:
+                row.skills_required = parsed.skills_required
+            if parsed.skills_nice_to_have:
+                row.skills_nice_to_have = parsed.skills_nice_to_have
+            enriched += 1
+            enriched_ids.append(row.id)
+        except Exception as e:
+            errors.append(f"{job_id}: {e}")
+
+    db.commit()
+    if enriched > 0:
+        run_detection_batch(db, job_ids=enriched_ids)
+    return {"enriched": enriched, "errors": errors[:20]}
+
+
+@router.post("/{job_id}/enrich")
+def enrich_job(job_id: str, db: Session = Depends(get_db)):
+    """Enrich a single job by re-parsing its URL for description and skills."""
+    row = db.query(JobRow).filter(JobRow.id == job_id).first()
+    if not row:
+        raise HTTPException(404, "Job not found")
+
+    from app.parsers.detector import detect_and_parse, is_supported_url
+    from app.services.skill_detector import run_detection_batch
+
+    if not is_supported_url(row.url):
+        raise api_error(
+            "UNSUPPORTED_URL",
+            f"Job source {row.source} is not supported for enrichment.",
+            status_code=400,
+        )
+
+    try:
+        parsed = detect_and_parse(row.url)
+    except Exception as e:
+        raise api_error(
+            "PARSE_FAILED",
+            f"Failed to parse job listing: {e}",
+            status_code=502,
+        )
+
+    if parsed.description and (not row.description or not row.description.strip()):
+        row.description = parsed.description
+    if parsed.skills_required:
+        row.skills_required = parsed.skills_required
+    if parsed.skills_nice_to_have:
+        row.skills_nice_to_have = parsed.skills_nice_to_have
+
+    db.commit()
+    db.refresh(row)
+    run_detection_batch(db, job_ids=[row.id])
+    return row.to_dict()
 
 
 @router.get("/{job_id}")

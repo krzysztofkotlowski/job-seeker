@@ -1,4 +1,5 @@
 import logging
+import threading
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -38,6 +39,53 @@ app.add_middleware(
 )
 
 
+def _maybe_sync_embeddings_on_startup():
+    """If Elasticsearch and embedding service are available, sync jobs for RAG in background."""
+    try:
+        from app.services.elasticsearch_service import (
+            JOBS_INDEX,
+            bulk_index_jobs,
+            is_available,
+            ensure_index,
+            _get_client,
+        )
+        from app.services.embedding_service import is_available as embed_is_available
+        from app.database import SessionLocal
+        from app.models.tables import JobRow
+
+        if not is_available():
+            return
+        if not embed_is_available():
+            log.debug("Startup embedding sync skipped: Ollama/embedding model not ready")
+            return
+        client = _get_client()
+        if not client or not ensure_index(client):
+            return
+        if client.count(index=JOBS_INDEX).get("count", 0) > 0:
+            return
+        db = SessionLocal()
+        try:
+            rows = db.query(JobRow).all()
+            if rows:
+                indexed = bulk_index_jobs(rows)
+                log.info("Startup: synced %d jobs to Elasticsearch for RAG", indexed)
+        finally:
+            db.close()
+    except Exception as e:
+        log.debug("Startup embedding sync skipped: %s", e)
+
+
+def _run_sync_in_background():
+    """Run embedding sync in a background thread so startup is not blocked."""
+    def _run():
+        try:
+            _maybe_sync_embeddings_on_startup()
+        except Exception as e:
+            log.warning("Background embedding sync failed: %s", e)
+    t = threading.Thread(target=_run, daemon=True)
+    t.start()
+
+
 @app.on_event("startup")
 def on_startup():
     try:
@@ -49,6 +97,7 @@ def on_startup():
         run_migrations(engine)
         from app.import_engine import recover_interrupted_imports
         recover_interrupted_imports()
+        _run_sync_in_background()
         log.info("Startup complete")
     except Exception as e:
         log.exception("Startup failed (DB or migrations): %s", e)
@@ -64,8 +113,13 @@ if resume_router is not None:
 
 
 @app.get("/api/v1/health")
-def health():
-    return {"status": "ok"}
+async def health():
+    from app.services.llm_service import check_ollama_health, get_llm_config
+    status = {"status": "ok"}
+    cfg = get_llm_config()
+    if cfg.url:
+        status["llm_available"] = await check_ollama_health()
+    return status
 
 
 @app.get("/api/v1/auth/config")

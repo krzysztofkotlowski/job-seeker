@@ -1,0 +1,11 @@
+[run]
+source = app
+omit = app/migrations/*,*/__pycache__/*
+
+[report]
+fail_under = 44
+show_missing = True
+exclude_lines =
+    pragma: no cover
+    def __repr__
+    raise NotImplementedError

@@ -142,6 +142,60 @@ export const api = {
       method: "POST",
     }),
 
+  /** Embedding index status for RAG. */
+  embeddingStatus: () =>
+    request<{ available: boolean; indexed: number; total: number; syncing?: boolean }>("/jobs/embedding-status"),
+
+  /** Sync embeddings (non-streaming). */
+  syncEmbeddings: () =>
+    request<{ indexed: number; total: number }>("/jobs/sync-embeddings", {
+      method: "POST",
+    }),
+
+  /** Sync embeddings with progress. Calls onProgress for each update. */
+  syncEmbeddingsStream: async (
+    onProgress: (indexed: number, total: number, done: boolean) => void,
+    signal?: AbortSignal,
+  ): Promise<{ indexed: number; total: number }> => {
+    const token = await getTokenForRequest();
+    const headers = new Headers();
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    const res = await fetch(`${BASE}/jobs/sync-embeddings/stream`, {
+      method: "POST",
+      headers,
+      signal,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const msg = body?.detail || body?.error?.message || `Embedding sync failed: ${res.status}`;
+      throw new Error(typeof msg === "string" ? msg : Array.isArray(msg) ? msg[0]?.msg || String(msg) : String(msg));
+    }
+    const reader = res.body?.getReader();
+    if (!reader) throw new Error("No response body");
+    const decoder = new TextDecoder();
+    let lastResult = { indexed: 0, total: 0 };
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const text = decoder.decode(value, { stream: true });
+      const lines = text.split("\n");
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          try {
+            const parsed = JSON.parse(line.slice(6)) as { indexed?: number; total?: number; done?: boolean };
+            if (typeof parsed.indexed === "number" && typeof parsed.total === "number") {
+              lastResult = { indexed: parsed.indexed, total: parsed.total };
+              onProgress(parsed.indexed, parsed.total, Boolean(parsed.done));
+            }
+          } catch {
+            // ignore parse errors
+          }
+        }
+      }
+    }
+    return lastResult;
+  },
+
   detectedSkills: (jobId: string) =>
     request<DetectedSkill[]>(`/skills/detected?job_id=${encodeURIComponent(jobId)}`),
 
@@ -229,5 +283,52 @@ export const api = {
       throw new Error(typeof msg === "string" ? msg : Array.isArray(msg) ? msg[0]?.msg || String(msg) : String(msg));
     }
     return res.json();
+  },
+
+  /** Stream AI summary. Calls onChunk for each chunk, returns final full text. */
+  resumeSummarizeStream: async (
+    data: { extracted_skills: string[]; matches: unknown[]; by_category: unknown[] },
+    onChunk: (chunk: string) => void,
+    signal?: AbortSignal,
+  ): Promise<string> => {
+    const token = await getTokenForRequest();
+    const headers = new Headers();
+    headers.set("Content-Type", "application/json");
+    if (token) headers.set("Authorization", `Bearer ${token}`);
+    const res = await fetch(`${BASE}/resume/summarize/stream`, {
+      method: "POST",
+      body: JSON.stringify(data),
+      headers,
+      signal,
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      const msg = body?.detail || body?.error?.message || `Summary failed: ${res.status}`;
+      throw new Error(typeof msg === "string" ? msg : Array.isArray(msg) ? msg[0]?.msg || String(msg) : String(msg));
+    }
+    const reader = res.body?.getReader();
+    if (!reader) throw new Error("No response body");
+    const decoder = new TextDecoder();
+    let full = "";
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      const text = decoder.decode(value, { stream: true });
+      const lines = text.split("\n");
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          try {
+            const parsed = JSON.parse(line.slice(6)) as { chunk?: string };
+            if (typeof parsed.chunk === "string") {
+              full += parsed.chunk;
+              onChunk(parsed.chunk);
+            }
+          } catch {
+            // ignore parse errors
+          }
+        }
+      }
+    }
+    return full;
   },
 };

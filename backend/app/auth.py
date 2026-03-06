@@ -12,6 +12,7 @@ from jwt import PyJWKClient
 log = logging.getLogger(__name__)
 
 KEYCLOAK_URL = os.environ.get("KEYCLOAK_URL", "").rstrip("/")
+KEYCLOAK_PUBLIC_URL = os.environ.get("KEYCLOAK_PUBLIC_URL", "").rstrip("/") or KEYCLOAK_URL
 KEYCLOAK_REALM = os.environ.get("KEYCLOAK_REALM", "jobseeker")
 
 security = HTTPBearer(auto_error=False)

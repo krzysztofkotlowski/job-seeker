@@ -5,12 +5,14 @@ import os
 import subprocess
 import tempfile
 from datetime import datetime
+from typing import Annotated
 from urllib.parse import urlparse
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
-from app.database import DATABASE_URL
+from app.auth import require_auth
+from app.database import get_database_url
 from app.errors import api_error
 
 log = logging.getLogger(__name__)
@@ -42,12 +44,12 @@ def _parse_pg_url(url: str) -> dict:
 
 
 @router.post("/create")
-def create_backup():
+def create_backup(_user: Annotated[dict | None, Depends(require_auth)] = None):
     """
     Create a database backup and return it as a downloadable .sql file.
     Only supports PostgreSQL (uses pg_dump). Requires pg_dump on PATH.
     """
-    url = DATABASE_URL or ""
+    url = get_database_url() or ""
     if "postgresql" not in url.split(":")[0]:
         raise api_error(
             "BACKUP_UNSUPPORTED_DB",

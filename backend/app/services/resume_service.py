@@ -1,10 +1,17 @@
 """Resume analysis service: match jobs and build by-category stats."""
 
+import logging
+import os
 from collections import defaultdict
+from uuid import UUID
 
 from sqlalchemy.orm import Session
 
 from app.models.tables import JobRow
+
+log = logging.getLogger(__name__)
+
+RAG_ENABLED = os.environ.get("RAG_ENABLED", "false").lower() in ("1", "true", "yes")
 
 
 def _normalize(s: str) -> str:
@@ -109,3 +116,78 @@ def build_by_category(db: Session, extracted_skills: set[str]) -> list[dict]:
         })
 
     return out
+
+
+def retrieve_semantic_matches(
+    db: Session,
+    extracted_skills: set[str],
+    top_k: int = 10,
+) -> list[dict]:
+    """
+    RAG: embed resume skills, kNN search in Elasticsearch, return matches with full job dict.
+    Returns [] if RAG unavailable (ES or embeddings disabled).
+    """
+    try:
+        from app.services.embedding_service import embed_text
+        from app.services.elasticsearch_service import is_available, search_similar
+    except ImportError:
+        return []
+
+    if not is_available():
+        return []
+    query_text = " ".join(sorted(extracted_skills)) if extracted_skills else ""
+    if not query_text.strip():
+        return []
+    embedding = embed_text(query_text)
+    if not embedding:
+        return []
+    hits = search_similar(query_embedding=embedding, top_k=top_k)
+    if not hits:
+        return []
+    results = []
+    for h in hits:
+        job_id = h.get("job_id")
+        if not job_id:
+            continue
+        try:
+            uid = UUID(job_id) if isinstance(job_id, str) else job_id
+        except (ValueError, TypeError):
+            continue
+        row = db.query(JobRow).filter(JobRow.id == uid).first()
+        if row:
+            results.append({
+                "job": row.to_dict(),
+                "matched_skills": [],
+                "match_count": 0,
+                "match_ratio": float(h.get("score", 0)),
+                "semantic": True,
+            })
+    return results
+
+
+def merge_keyword_and_semantic_matches(
+    keyword_matches: list[dict],
+    semantic_matches: list[dict],
+    max_total: int = 8,
+) -> list[dict]:
+    """
+    Merge keyword and semantic matches, deduplicating by (title, company).
+    Keyword matches come first (higher relevance).
+    """
+    seen: set[tuple[str, str]] = set()
+    merged = []
+    for m in keyword_matches:
+        job = m.get("job") or {}
+        key = (job.get("title", "") or "", job.get("company", "") or "")
+        if key not in seen and key != ("", ""):
+            seen.add(key)
+            merged.append(m)
+    for m in semantic_matches:
+        job = m.get("job") or {}
+        key = (job.get("title", "") or "", job.get("company", "") or "")
+        if key not in seen and key != ("", ""):
+            seen.add(key)
+            merged.append(m)
+        if len(merged) >= max_total:
+            break
+    return merged[:max_total]

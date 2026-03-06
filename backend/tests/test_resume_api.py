@@ -85,6 +85,28 @@ def test_resume_summarize_503_when_llm_unavailable(client: TestClient):
     assert r.status_code == 503
 
 
+def test_resume_summarize_stream_returns_sse(client: TestClient):
+    """Summarize stream returns SSE with chunks."""
+    async def fake_stream(*_args, **_kwargs):
+        yield "Hello "
+        yield "world."
+
+    with patch("app.routers.resume.summarize_resume_match_stream", side_effect=fake_stream):
+        r = client.post(
+            "/api/v1/resume/summarize/stream",
+            json={
+                "extracted_skills": ["Python"],
+                "matches": [{"job": {"title": "Backend", "company": "Acme", "url": "https://example.com/1"}, "matched_skills": ["Python"], "match_count": 1}],
+                "by_category": [{"category": "Backend", "match_score": 80, "matching_skills": [], "skills_to_add": []}],
+            },
+        )
+    assert r.status_code == 200
+    assert r.headers.get("content-type", "").startswith("text/event-stream")
+    body = r.text
+    assert "Hello " in body
+    assert "world." in body
+
+
 def test_resume_analyze_rejects_non_pdf(client: TestClient):
     """Reject non-PDF files."""
     files = {"file": ("resume.txt", BytesIO(b"plain text"), "text/plain")}

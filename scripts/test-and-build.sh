@@ -10,7 +10,7 @@ ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT"
 
 echo "=== 0. Prepare test environment ==="
-docker compose up postgres -d
+docker compose up postgres elasticsearch -d
 echo "Waiting for Postgres to be ready..."
 for i in {1..30}; do
   if docker compose exec -T postgres pg_isready -U jobseeker -q 2>/dev/null; then
@@ -22,6 +22,13 @@ if ! docker compose exec -T postgres pg_isready -U jobseeker -q 2>/dev/null; the
   echo "Postgres failed to become ready."
   exit 1
 fi
+echo "Waiting for Elasticsearch to be ready (up to 60s)..."
+for i in {1..30}; do
+  if curl -sf http://localhost:9200/_cluster/health >/dev/null 2>&1; then
+    break
+  fi
+  sleep 2
+done
 echo "Creating jobseeker_test database if not exists..."
 docker compose exec -T postgres psql -U jobseeker -c "CREATE DATABASE jobseeker_test" 2>/dev/null || true
 echo "Environment ready."
@@ -31,7 +38,7 @@ echo "=== 1. Backend tests ==="
 cd backend
 pip install -q -r requirements.txt
 export DATABASE_URL="${TEST_DATABASE_URL:-postgresql://jobseeker:jobseeker@localhost:5432/jobseeker_test}"
-if ! python3 -m pytest tests/ -v --tb=short; then
+if ! python3 -m pytest tests/ -v --tb=short --cov=app --cov-report=term-missing; then
   echo "Backend tests failed."
   exit 1
 fi
@@ -51,7 +58,7 @@ echo "=== 3. Docker build and up ==="
 docker compose up --build -d
 
 echo ""
-echo "=== 4. Pull Ollama model (for resume AI summary) ==="
+echo "=== 4. Ollama models (tinyllama + nomic-embed-text only) ==="
 echo "Waiting for Ollama to be ready..."
 for i in {1..60}; do
   if curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then
@@ -60,11 +67,34 @@ for i in {1..60}; do
   sleep 2
 done
 if curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then
-  echo "Pulling tinyllama (this may take a few minutes on first run)..."
-  docker compose exec -T ollama ollama pull tinyllama
-  echo "Model ready."
+  echo "Removing unused models (keeping only tinyllama and nomic-embed-text)..."
+  while IFS= read -r full; do
+    base="${full%%:*}"
+    case "$base" in
+      tinyllama|nomic-embed-text) ;;
+      *) echo "  Removing $full"; docker compose exec -T ollama ollama rm "$full" 2>/dev/null || true ;;
+    esac
+  done < <(docker compose exec -T ollama ollama list 2>/dev/null | awk 'NR>1 {print $1}' || true)
+  echo "Pulling tinyllama (for resume AI summary)..."
+  docker compose exec -T ollama ollama pull tinyllama || true
+  echo "Pulling nomic-embed-text (for RAG)..."
+  docker compose exec -T ollama ollama pull nomic-embed-text || true
+  echo "Models ready."
 else
   echo "Ollama not reachable; resume summaries will be disabled. Run: docker compose exec ollama ollama pull tinyllama"
+fi
+
+echo ""
+echo "=== 5. Verify containers ==="
+if curl -sf http://localhost:9200/_cluster/health >/dev/null 2>&1; then
+  echo "Elasticsearch: OK"
+else
+  echo "Elasticsearch: not reachable"
+fi
+if curl -sf http://localhost:8000/api/v1/health >/dev/null 2>&1; then
+  echo "Backend: OK"
+else
+  echo "Backend: not reachable"
 fi
 
 echo ""
