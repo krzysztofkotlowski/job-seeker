@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 
 from app.auth import get_current_user_optional, require_auth
 from app.database import get_db
+from app.models.resume import ResumeSummarizeRequest
 from app.models.tables import ResumeRow, UserRow
 from app.services.llm_service import summarize_resume_match, summarize_resume_match_stream
 from app.services.resume_keywords import extract_keywords_from_pdf
@@ -18,7 +19,6 @@ from app.services.resume_service import (
     build_by_category,
     match_jobs_to_skills,
     merge_keyword_and_semantic_matches,
-    retrieve_hybrid_recommendations,
     retrieve_semantic_matches,
     RAG_ENABLED,
 )
@@ -146,57 +146,15 @@ async def analyze_resume(
         raise HTTPException(500, f"Resume analysis failed: {e!s}")
 
 
-@router.post("/recommendations")
-def get_recommendations(
-    body: dict = Body(
-        ...,
-        examples=[{"extracted_skills": ["Python", "FastAPI"]}],
-    ),
-    db: Session = Depends(get_db),
-):
-    """Return hybrid search job recommendations for given skills. Called in background after analyze."""
-    extracted_skills = body.get("extracted_skills") or []
-    if not extracted_skills:
-        return {"recommendations": []}
-    try:
-        recs = retrieve_hybrid_recommendations(db, set(extracted_skills), top_k=8)
-        recommendations = []
-        for r in recs:
-            job = r.get("job") or {}
-            recommendations.append({
-                "job": {
-                    "id": job.get("id"),
-                    "title": job.get("title"),
-                    "company": job.get("company"),
-                    "url": job.get("url"),
-                    "category": job.get("category"),
-                },
-                "score": r.get("score"),
-            })
-        return {"recommendations": recommendations}
-    except Exception as e:
-        log.exception("Recommendations failed")
-        raise HTTPException(500, f"Recommendations failed: {e!s}")
-
-
 @router.post("/summarize")
-async def summarize_match(
-    body: dict = Body(
-        ...,
-        examples=[{
-            "extracted_skills": ["Python", "FastAPI"],
-            "matches": [{"job": {"title": "Backend Dev", "company": "Acme"}, "matched_skills": ["Python"], "match_count": 1}],
-            "by_category": [{"category": "Backend", "match_score": 80, "matching_skills": [], "skills_to_add": []}],
-        }],
-    ),
-):
+async def summarize_match(body: ResumeSummarizeRequest = Body(...)):
     """
     Generate AI summary for resume-job match data. Call this on user request after analyze.
     Returns 503 if LLM is disabled or unavailable.
     """
-    extracted_skills = body.get("extracted_skills") or []
-    matches = body.get("matches") or []
-    by_category = body.get("by_category") or []
+    extracted_skills = body.extracted_skills or []
+    matches = body.matches or []
+    by_category = body.by_category or []
     summary = await summarize_resume_match(extracted_skills, matches, by_category)
     if summary is None:
         raise HTTPException(
@@ -207,22 +165,13 @@ async def summarize_match(
 
 
 @router.post("/summarize/stream")
-async def summarize_match_stream(
-    body: dict = Body(
-        ...,
-        examples=[{
-            "extracted_skills": ["Python", "FastAPI"],
-            "matches": [{"job": {"title": "Backend Dev", "company": "Acme", "url": "https://example.com/job/1"}, "matched_skills": ["Python"], "match_count": 1}],
-            "by_category": [{"category": "Backend", "match_score": 80, "matching_skills": [], "skills_to_add": []}],
-        }],
-    ),
-):
+async def summarize_match_stream(body: ResumeSummarizeRequest = Body(...)):
     """
     Stream AI summary as Server-Sent Events. Each event is a JSON object with a "chunk" field.
     """
-    extracted_skills = body.get("extracted_skills") or []
-    matches = body.get("matches") or []
-    by_category = body.get("by_category") or []
+    extracted_skills = body.extracted_skills or []
+    matches = body.matches or []
+    by_category = body.by_category or []
 
     async def generate():
         async for chunk in summarize_resume_match_stream(extracted_skills, matches, by_category):

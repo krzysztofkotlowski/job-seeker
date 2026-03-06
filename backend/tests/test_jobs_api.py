@@ -168,3 +168,41 @@ def test_enrich_batch_missing_ids(client: TestClient):
     body = r.json()
     assert body["error"]["code"] == "MISSING_IDS"
 
+
+def test_list_categories(client: TestClient):
+    """List categories returns array (may be empty)."""
+    r = client.get("/api/v1/jobs/categories")
+    assert r.status_code == 200
+    data = r.json()
+    assert isinstance(data, list)
+
+
+def test_list_work_types(client: TestClient):
+    """List work types returns array."""
+    r = client.get("/api/v1/jobs/work-types")
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+
+
+def test_list_locations(client: TestClient):
+    """List locations returns array."""
+    r = client.get("/api/v1/jobs/locations")
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+
+
+def test_list_seniorities(client: TestClient):
+    """List seniorities returns array."""
+    r = client.get("/api/v1/jobs/seniorities")
+    assert r.status_code == 200
+    assert isinstance(r.json(), list)
+
+
+def test_list_top_skills(client: TestClient):
+    """List top skills returns array, respects top param."""
+    r = client.get("/api/v1/jobs/top-skills", params={"top": 10})
+    assert r.status_code == 200
+    data = r.json()
+    assert isinstance(data, list)
+    assert len(data) <= 10
+

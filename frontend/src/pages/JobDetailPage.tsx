@@ -17,21 +17,15 @@ import OpenInNewIcon from "@mui/icons-material/OpenInNew";
 import DeleteOutlineIcon from "@mui/icons-material/DeleteOutline";
 import { api } from "../api/client";
 import type { Job, JobStatus, DetectedSkill } from "../api/types";
+import { useToast } from "../contexts/useToast";
+import { formatSalaryLines, STATUS_CONFIG } from "../utils/job";
 
 const STATUSES: JobStatus[] = ["new", "seen", "applied", "interview", "offer", "rejected"];
-
-const STATUS_COLOR: Record<string, "default" | "primary" | "warning" | "success" | "error" | "info"> = {
-  new: "primary",
-  seen: "default",
-  applied: "warning",
-  interview: "info",
-  offer: "success",
-  rejected: "error",
-};
 
 export function JobDetailPage() {
   const { id } = useParams<{ id: string }>();
   const navigate = useNavigate();
+  const toast = useToast();
   const [job, setJob] = useState<Job | null>(null);
   const [loading, setLoading] = useState(true);
   const [notes, setNotes] = useState("");
@@ -43,10 +37,10 @@ export function JobDetailPage() {
     if (!id) return;
     setLoading(true);
     api.getJob(id).then((j) => { setJob(j); setNotes(j.notes); })
-      .catch(() => navigate("/jobs"))
+      .catch((e) => { toast.showError(e instanceof Error ? e.message : "Job not found"); navigate("/jobs"); })
       .finally(() => setLoading(false));
-    api.detectedSkills(id).then(setDetectedSkills).catch(() => {});
-  }, [id, navigate]);
+    api.detectedSkills(id).then(setDetectedSkills).catch((e) => toast.showError(e instanceof Error ? e.message : "Failed to load detected skills"));
+  }, [id, navigate, toast]);
 
   if (loading) {
     return (
@@ -60,24 +54,28 @@ export function JobDetailPage() {
   const handleStatusChange = async (status: JobStatus) => {
     setSaving(true);
     try { setJob(await api.updateJob(job.id, { status })); }
+    catch (e) { toast.showError(e instanceof Error ? e.message : "Failed to update status"); }
     finally { setSaving(false); }
   };
 
   const handleSaveNotes = async () => {
     setSaving(true);
     try { setJob(await api.updateJob(job.id, { notes })); }
+    catch (e) { toast.showError(e instanceof Error ? e.message : "Failed to save notes"); }
     finally { setSaving(false); }
   };
 
   const handleToggleReposted = async () => {
     setSaving(true);
     try { setJob(await api.updateJob(job.id, { is_reposted: !job.is_reposted })); }
+    catch (e) { toast.showError(e instanceof Error ? e.message : "Failed to update"); }
     finally { setSaving(false); }
   };
 
   const handleToggleSaved = async () => {
     setSaving(true);
     try { setJob(await api.updateJob(job.id, { saved: !job.saved })); }
+    catch (e) { toast.showError(e instanceof Error ? e.message : "Failed to update saved status"); }
     finally { setSaving(false); }
   };
 
@@ -85,6 +83,7 @@ export function JobDetailPage() {
     if (!confirm("Remove this job from tracking?")) return;
     setDeleting(true);
     try { await api.deleteJob(job.id); navigate("/jobs"); }
+    catch (e) { toast.showError(e instanceof Error ? e.message : "Failed to delete job"); }
     finally { setDeleting(false); }
   };
 
@@ -109,7 +108,11 @@ export function JobDetailPage() {
             variant="outlined"
             color="inherit"
             onClick={async () => {
-              try { await api.updateJob(job.id, { status: "seen" }); } catch {}
+              try {
+                await api.updateJob(job.id, { status: "seen" });
+              } catch {
+                // Intentionally ignore; navigate on success only
+              }
               navigate(-1);
             }}
             disabled={saving}
@@ -140,7 +143,7 @@ export function JobDetailPage() {
           </Box>
           <Chip
             label={job.status.charAt(0).toUpperCase() + job.status.slice(1)}
-            color={STATUS_COLOR[job.status] ?? "default"}
+            color={STATUS_CONFIG[job.status]?.color ?? "default"}
           />
         </Box>
       </Box>
@@ -367,7 +370,7 @@ function formatDescription(raw: string): string {
   let inList = false;
 
   const isBullet = (line: string) =>
-    /^\s*[•·–—\-\*►▸▹✓✔☑]\s/.test(line) || /^\s*\d+[.)]\s/.test(line);
+    /^\s*[•·–—\-*►▸▹✓✔☑]\s/.test(line) || /^\s*\d+[.)]\s/.test(line);
 
   const isHeader = (line: string) => {
     const trimmed = line.trim();
@@ -379,7 +382,7 @@ function formatDescription(raw: string): string {
   };
 
   const stripBullet = (line: string) =>
-    line.replace(/^\s*[•·–—\-\*►▸▹✓✔☑]\s*/, "").replace(/^\s*\d+[.)]\s*/, "").trim();
+    line.replace(/^\s*[•·–—\-*►▸▹✓✔☑]\s*/, "").replace(/^\s*\d+[.)]\s*/, "").trim();
 
   for (const line of lines) {
     const trimmed = line.trim();
@@ -407,24 +410,4 @@ function formatDescription(raw: string): string {
   if (inList) htmlParts.push("</ul>");
 
   return htmlParts.join("");
-}
-
-function formatSalaryLines(job: Job) {
-  const s = job.salary;
-  if (!s || (!s.min && !s.max)) return { plnLine: "Not specified", hourlyLine: null, originalLine: null };
-  const fmt = (n: number | null) => (n != null ? n.toLocaleString("pl-PL", { maximumFractionDigits: 0 }) : "?");
-  const cur = s.currency ?? "";
-  const periodLabel = s.period === "hourly" ? "/h" : s.period === "daily" ? "/day" : "/mo";
-  const contractType = s.type ? ` (${s.type})` : "";
-  const originalStr = `${fmt(s.min)} - ${fmt(s.max)} ${cur}${periodLabel}${contractType}`;
-
-  if (s.min_pln != null && s.max_pln != null) {
-    const plnLine = `${fmt(s.min_pln)} - ${fmt(s.max_pln)} PLN/mo`;
-    const hMin = Math.round(s.min_pln / 160);
-    const hMax = Math.round(s.max_pln / 160);
-    const hourlyLine = `${fmt(hMin)} - ${fmt(hMax)} PLN/h`;
-    const originalLine = cur !== "PLN" || s.period !== "monthly" ? originalStr : null;
-    return { plnLine, hourlyLine, originalLine };
-  }
-  return { plnLine: originalStr, hourlyLine: null, originalLine: null };
 }

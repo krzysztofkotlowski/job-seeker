@@ -25,8 +25,12 @@ import Divider from "@mui/material/Divider";
 import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
 import Badge from "@mui/material/Badge";
+import Dialog from "@mui/material/Dialog";
+import DialogTitle from "@mui/material/DialogTitle";
+import DialogContent from "@mui/material/DialogContent";
 import SearchIcon from "@mui/icons-material/Search";
 import FilterListIcon from "@mui/icons-material/FilterList";
+import AddIcon from "@mui/icons-material/Add";
 import InboxIcon from "@mui/icons-material/Inbox";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import FileCopyOutlinedIcon from "@mui/icons-material/FileCopyOutlined";
@@ -34,7 +38,10 @@ import BookmarkIcon from "@mui/icons-material/Bookmark";
 import BookmarkBorderIcon from "@mui/icons-material/BookmarkBorder";
 import { api } from "../api/client";
 import type { Job, PaginatedResponse } from "../api/types";
+import { AddJobForm } from "../components/AddJobForm";
 import { StatusBadge } from "../components/StatusBadge";
+import { useToast } from "../contexts/useToast";
+import { formatSalary, STATUS_TAB_COLORS } from "../utils/job";
 
 const STATUS_TABS = [
   { value: "", label: "All" },
@@ -45,15 +52,6 @@ const STATUS_TABS = [
   { value: "offer", label: "Offer" },
   { value: "rejected", label: "Rejected" },
 ] as const;
-
-const STATUS_TAB_COLORS: Record<string, string> = {
-  new: "#6366f1",
-  seen: "#9ca3af",
-  applied: "#0ea5e9",
-  interview: "#f59e0b",
-  offer: "#22c55e",
-  rejected: "#ef4444",
-};
 
 const SOURCE_OPTIONS = [
   { value: "", label: "All Sources" },
@@ -78,6 +76,7 @@ const FILTER_STORAGE_KEY = "job-list-filters";
 
 export function JobListPage() {
   const navigate = useNavigate();
+  const toast = useToast();
   const [searchParams, setSearchParams] = useSearchParams();
   const [data, setData] = useState<PaginatedResponse<Job> | null>(null);
   const [loading, setLoading] = useState(true);
@@ -91,6 +90,7 @@ export function JobListPage() {
   const [readyToFetch, setReadyToFetch] = useState(false);
   const [counts, setCounts] = useState<{ by_status: Record<string, number>; saved_count: number } | null>(null);
   const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [addJobOpen, setAddJobOpen] = useState(false);
 
   const page = Number(searchParams.get("page") || "1");
   const status = searchParams.get("status") || "";
@@ -116,8 +116,8 @@ export function JobListPage() {
       api.listCategories().then(setCategories),
       api.listSeniorities().then(setSeniorities),
       api.listTopSkills(100).then(setTopSkills),
-    ]).catch(() => {});
-  }, []);
+    ]).catch((e) => toast.showError(e instanceof Error ? e.message : "Failed to load filter options"));
+  }, [toast]);
 
   // Debounce search for analytics to avoid a request on every keystroke
   useEffect(() => {
@@ -147,11 +147,14 @@ export function JobListPage() {
       .then((a) => {
         if (!ac.signal.aborted) setCounts({ by_status: a.by_status, saved_count: a.saved_count ?? 0 });
       })
-      .catch(() => {
-        if (!ac.signal.aborted) setCounts(null);
+      .catch((e) => {
+        if (!ac.signal.aborted) {
+          setCounts(null);
+          toast.showError(e instanceof Error ? e.message : "Failed to load analytics");
+        }
       });
     return () => ac.abort();
-  }, [readyToFetch, source, category, seniority, skillsParam, debouncedSearch, reposted, workType, location, savedFilter, showDuplicates]);
+  }, [readyToFetch, source, category, seniority, skillsParam, debouncedSearch, reposted, workType, location, savedFilter, showDuplicates, toast]);
 
   useEffect(() => {
     if (filtersRestored) return;
@@ -200,11 +203,11 @@ export function JobListPage() {
       });
       setData(result);
     } catch (e) {
-      console.error(e);
+      toast.showError(e instanceof Error ? e.message : "Failed to load jobs");
     } finally {
       setLoading(false);
     }
-  }, [page, status, source, search, reposted, sortBy, workType, location, category, seniority, skillsParam, savedFilter, showDuplicates]);
+  }, [page, status, source, search, reposted, sortBy, workType, location, category, seniority, skillsParam, savedFilter, showDuplicates, toast]);
 
   useEffect(() => {
     if (!readyToFetch) return;
@@ -271,7 +274,7 @@ export function JobListPage() {
       await api.updateJob(jobId, { saved: !current });
       fetchJobs();
     } catch (err) {
-      console.error(err);
+      toast.showError(err instanceof Error ? err.message : "Failed to update saved status");
     }
   };
 
@@ -281,7 +284,7 @@ export function JobListPage() {
       await api.updateJob(jobId, { status: "seen" });
       fetchJobs();
     } catch (err) {
-      console.error(err);
+      toast.showError(err instanceof Error ? err.message : "Failed to mark as seen");
     }
   };
 
@@ -306,6 +309,14 @@ export function JobListPage() {
           )}
           <Button
             size="small"
+            variant="contained"
+            startIcon={<AddIcon />}
+            onClick={() => setAddJobOpen(true)}
+          >
+            Add Job
+          </Button>
+          <Button
+            size="small"
             variant="outlined"
             startIcon={<FilterListIcon />}
             onClick={() => setShowFilters((v) => !v)}
@@ -317,6 +328,18 @@ export function JobListPage() {
           </Button>
         </Box>
       </Box>
+
+      <Dialog open={addJobOpen} onClose={() => setAddJobOpen(false)} maxWidth="sm" fullWidth>
+        <DialogTitle>Add Job Offer</DialogTitle>
+        <DialogContent>
+          <AddJobForm
+            onJobAdded={() => {
+              setAddJobOpen(false);
+              fetchJobs();
+            }}
+          />
+        </DialogContent>
+      </Dialog>
 
       <Paper elevation={0} sx={{ border: 1, borderColor: "divider", borderRadius: 2, overflow: "hidden" }}>
         {/* Search */}
@@ -727,27 +750,4 @@ function FilterSelect({
       </Select>
     </FormControl>
   );
-}
-
-const fmtNum = (n: number | null) =>
-  n != null ? n.toLocaleString("pl-PL", { maximumFractionDigits: 0 }) : "?";
-
-function formatSalary(j: Job): { plnLine: string; hourlyLine: string | null; originalLine: string | null } {
-  const s = j.salary;
-  if (!s || (!s.min && !s.max)) return { plnLine: "\u2014", hourlyLine: null, originalLine: null };
-
-  const cur = s.currency ?? "";
-  const periodLabel = s.period === "hourly" ? "/h" : s.period === "daily" ? "/day" : "/mo";
-  const originalStr = `${fmtNum(s.min)} - ${fmtNum(s.max)} ${cur}${periodLabel}`;
-
-  if (s.min_pln != null && s.max_pln != null) {
-    const plnLine = `${fmtNum(s.min_pln)} - ${fmtNum(s.max_pln)} PLN/mo`;
-    const hMin = Math.round(s.min_pln / 160);
-    const hMax = Math.round(s.max_pln / 160);
-    const hourlyLine = `${fmtNum(hMin)} - ${fmtNum(hMax)} PLN/h`;
-    const originalLine = cur !== "PLN" || s.period !== "monthly" ? originalStr : null;
-    return { plnLine, hourlyLine, originalLine };
-  }
-
-  return { plnLine: originalStr, hourlyLine: null, originalLine: null };
 }

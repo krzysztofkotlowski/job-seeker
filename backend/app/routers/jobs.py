@@ -1,10 +1,11 @@
+import asyncio
 import logging
 import uuid
 from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Depends
-from sqlalchemy import func, or_, cast, Numeric, and_, tuple_
+from sqlalchemy import func, or_, cast, Numeric, and_, tuple_, select
 from sqlalchemy.orm import Session
 
 from app.database import get_db
@@ -224,6 +225,7 @@ def list_jobs(
     total = q.count()
     pages = max(1, (total + per_page - 1) // per_page)
 
+    ids_subq = q.with_entities(JobRow.id).subquery()
     rows_q = (
         db.query(JobRow, dup_count_sq.c.dup_count)
         .outerjoin(
@@ -233,7 +235,7 @@ def list_jobs(
                 title_l == dup_count_sq.c.dc_title,
             ),
         )
-        .filter(JobRow.id.in_(q.with_entities(JobRow.id).subquery()))
+        .filter(JobRow.id.in_(select(ids_subq.c.id)))
         .order_by(*order)
         .offset((page - 1) * per_page)
         .limit(per_page)
@@ -686,8 +688,40 @@ def embedding_status(db: Session = Depends(get_db)):
         return {"available": True, "indexed": 0, "total": 0, "syncing": is_sync_in_progress()}
 
 
+@router.delete("/embedding-index")
+def clear_embedding_index():
+    """Clear the Elasticsearch jobs index. Use before full re-index."""
+    try:
+        from app.services.elasticsearch_service import clear_index, is_available, is_sync_in_progress
+    except ImportError:
+        raise api_error(
+            "RAG_UNAVAILABLE",
+            "Elasticsearch not configured. Install elasticsearch package.",
+            status_code=503,
+        )
+    if not is_available():
+        raise api_error(
+            "ELASTICSEARCH_UNAVAILABLE",
+            "Elasticsearch is not reachable. Ensure it is running.",
+            status_code=503,
+        )
+    if is_sync_in_progress():
+        raise api_error(
+            "SYNC_IN_PROGRESS",
+            "Embedding sync is already running. Please wait for it to complete.",
+            status_code=409,
+        )
+    ok = clear_index()
+    if not ok:
+        raise api_error("CLEAR_FAILED", "Failed to clear embedding index", status_code=500)
+    return {"cleared": True}
+
+
 @router.post("/sync-embeddings/stream")
-def sync_embeddings_stream(db: Session = Depends(get_db)):
+def sync_embeddings_stream(
+    db: Session = Depends(get_db),
+    mode: str = Query("incremental", description="full=clear+reindex all, incremental=add missing only"),
+):
     """
     Index all jobs into Elasticsearch with SSE progress updates.
     Streams events: data: {"indexed": N, "total": M}\n\n and final data: {"done": true, "indexed": N, "total": M}\n\n
@@ -699,6 +733,8 @@ def sync_embeddings_stream(db: Session = Depends(get_db)):
     try:
         from app.services.elasticsearch_service import (
             bulk_index_jobs_stream,
+            clear_index,
+            get_jobs_not_indexed,
             is_available,
             is_sync_in_progress,
         )
@@ -722,12 +758,29 @@ def sync_embeddings_stream(db: Session = Depends(get_db)):
         )
     rows = db.query(JobRow).all()
 
-    def stream_gen():
-        for event in bulk_index_jobs_stream(rows):
+    if mode == "full":
+        if not clear_index():
+            raise api_error("CLEAR_FAILED", "Failed to clear embedding index", status_code=500)
+        jobs_to_index = rows
+    else:
+        jobs_to_index = get_jobs_not_indexed(rows)
+        if not jobs_to_index:
+            async def empty_stream():
+                yield f"data: {json.dumps({'done': True, 'indexed': 0, 'total': 0})}\n\n"
+                await asyncio.sleep(0)
+            return StreamingResponse(
+                empty_stream(),
+                media_type="text/event-stream",
+                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+            )
+
+    async def stream_gen_async():
+        for event in bulk_index_jobs_stream(jobs_to_index):
             yield f"data: {json.dumps(event)}\n\n"
+            await asyncio.sleep(0)  # Force flush to client
 
     return StreamingResponse(
-        stream_gen(),
+        stream_gen_async(),
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )

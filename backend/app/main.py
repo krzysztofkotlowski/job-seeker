@@ -3,8 +3,12 @@ import threading
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from slowapi import Limiter, _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from slowapi.util import get_remote_address
 
-from app.database import engine, Base
+from app.config import get_cors_origins, get_rate_limit
+from app.database import engine, Base, wait_for_db
 from app.errors import setup_exception_handlers
 from app.routers import jobs, skills, imports, backup
 
@@ -18,6 +22,8 @@ except Exception as e:
     log.warning("Resume module not loaded (PDF/JSON resume analysis disabled): %s", e)
     resume_router = None
 
+limiter = Limiter(key_func=get_remote_address, default_limits=[get_rate_limit()])
+
 app = FastAPI(
     title="Job Seeker Tracker",
     version="2.0.0",
@@ -28,11 +34,16 @@ app = FastAPI(
     openapi_url="/api/v1/openapi.json",
 )
 
+app.state.limiter = limiter
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
 setup_exception_handlers(app)
+
+from app.middleware.request_id import RequestIDMiddleware
+app.add_middleware(RequestIDMiddleware)
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=get_cors_origins(),
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -115,10 +126,23 @@ if resume_router is not None:
 @app.get("/api/v1/health")
 async def health():
     from app.services.llm_service import check_ollama_health, get_llm_config
-    status = {"status": "ok"}
+
+    status: dict = {"status": "ok"}
+    try:
+        wait_for_db(max_attempts=1, delay=0)
+        status["database_available"] = True
+    except Exception:
+        status["database_available"] = False
+    try:
+        from app.services.elasticsearch_service import is_available as es_available
+        status["elasticsearch_available"] = es_available()
+    except ImportError:
+        status["elasticsearch_available"] = False
     cfg = get_llm_config()
     if cfg.url:
         status["llm_available"] = await check_ollama_health()
+    else:
+        status["llm_available"] = False
     return status
 
 

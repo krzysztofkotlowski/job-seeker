@@ -2,7 +2,23 @@
 
 import pytest
 
+from app.parsers.detector import is_supported_url
 from app.parsers.nofluffjobs import NoFluffJobsParser
+
+
+def test_is_supported_url_true_justjoin():
+    """is_supported_url returns True for justjoin.it URLs."""
+    assert is_supported_url("https://justjoin.it/jobs/acme-python-dev") is True
+
+
+def test_is_supported_url_true_nofluff():
+    """is_supported_url returns True for nofluffjobs.com URLs."""
+    assert is_supported_url("https://nofluffjobs.com/job/acme-python-dev") is True
+
+
+def test_is_supported_url_false():
+    """is_supported_url returns False for unsupported URLs."""
+    assert is_supported_url("https://example.com/job/123") is False
 
 
 class TestNoFluffJobsParseApiPosting:

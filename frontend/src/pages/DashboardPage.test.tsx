@@ -4,6 +4,7 @@ import { vi } from "vitest";
 
 import { DashboardPage } from "./DashboardPage";
 import { api } from "../api/client";
+import { ToastProvider } from "../contexts/ToastContext";
 
 vi.mock("../api/client", () => ({
   api: {
@@ -26,7 +27,11 @@ vi.mock("../api/client", () => ({
 }));
 
 function renderWithRouter(ui: React.ReactElement) {
-  return render(<BrowserRouter>{ui}</BrowserRouter>);
+  return render(
+    <BrowserRouter>
+      <ToastProvider>{ui}</ToastProvider>
+    </BrowserRouter>
+  );
 }
 
 describe("DashboardPage", () => {

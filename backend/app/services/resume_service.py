@@ -7,6 +7,7 @@ from uuid import UUID
 
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.models.tables import JobRow
 
 log = logging.getLogger(__name__)
@@ -24,7 +25,8 @@ def match_jobs_to_skills(db: Session, resume_skills: set[str]) -> list[dict]:
     if not target:
         return []
 
-    rows = db.query(JobRow).all()
+    limit = get_settings().resume_match_job_limit
+    rows = db.query(JobRow).limit(limit).all()
     results = []
     for row in rows:
         raw_skills = (row.skills_required or []) + (row.skills_nice_to_have or [])
@@ -47,10 +49,11 @@ def match_jobs_to_skills(db: Session, resume_skills: set[str]) -> list[dict]:
 def build_by_category(db: Session, extracted_skills: set[str]) -> list[dict]:
     """For each category, compute matching/unmatched skills with occurrence weights and match score 1-100."""
     extracted_lower = {_normalize(s) for s in extracted_skills if s}
+    limit = get_settings().resume_match_job_limit
     rows = db.query(JobRow).filter(
         JobRow.category.isnot(None),
         JobRow.category != "",
-    ).all()
+    ).limit(limit).all()
 
     cat_skill_weight: dict[str, dict[str, int]] = defaultdict(lambda: defaultdict(int))
     cat_skill_required: dict[str, dict[str, bool]] = defaultdict(dict)

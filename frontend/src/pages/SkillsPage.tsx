@@ -1,4 +1,4 @@
-import { useEffect, useState, useCallback } from "react";
+import { useEffect, useState } from "react";
 import Box from "@mui/material/Box";
 import Paper from "@mui/material/Paper";
 import Typography from "@mui/material/Typography";
@@ -15,10 +15,12 @@ import LinearProgress from "@mui/material/LinearProgress";
 import SearchIcon from "@mui/icons-material/Search";
 import { api } from "../api/client";
 import type { SkillsSummary } from "../api/types";
+import { useToast } from "../contexts/useToast";
 
 const PER_PAGE_OPTIONS = [50, 100, 200];
 
 export function SkillsPage() {
+  const toast = useToast();
   const [data, setData] = useState<SkillsSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [categories, setCategories] = useState<string[]>([]);
@@ -29,11 +31,11 @@ export function SkillsPage() {
   const [perPage, setPerPage] = useState(100);
 
   useEffect(() => {
-    api.listCategories().then(setCategories).catch(() => {});
-  }, []);
+    api.listCategories().then(setCategories).catch((e) => toast.showError(e instanceof Error ? e.message : "Failed to load categories"));
+  }, [toast]);
 
-  const fetchSkills = useCallback(() => {
-    setLoading(true);
+  useEffect(() => {
+    queueMicrotask(() => setLoading(true));
     api
       .skillsSummary({
         per_page: perPage,
@@ -42,12 +44,9 @@ export function SkillsPage() {
         search: search || undefined,
       })
       .then(setData)
+      .catch((e) => toast.showError(e instanceof Error ? e.message : "Failed to load skills"))
       .finally(() => setLoading(false));
-  }, [selectedCategory, page, perPage, search]);
-
-  useEffect(() => {
-    fetchSkills();
-  }, [fetchSkills]);
+  }, [selectedCategory, page, perPage, search, toast]);
 
   const handleCategoryChange = (e: SelectChangeEvent) => {
     setSelectedCategory(e.target.value);

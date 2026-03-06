@@ -1,30 +1,10 @@
-import {
-  createContext,
-  useCallback,
-  useContext,
-  useEffect,
-  useState,
-  type ReactNode,
-} from "react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
 import Keycloak from "keycloak-js";
+import { AuthContext } from "./auth-context";
+import type { AuthConfig, AuthState } from "./auth-context";
 import { setTokenProvider } from "./tokenProvider";
 
-export interface AuthConfig {
-  enabled: boolean;
-  url?: string;
-  realm?: string;
-}
-
-export interface AuthState {
-  config: AuthConfig | null;
-  keycloak: Keycloak | null;
-  authenticated: boolean;
-  login: () => void;
-  logout: () => void;
-  getToken: () => Promise<string | null>;
-}
-
-const AuthContext = createContext<AuthState | null>(null);
+export type { AuthConfig, AuthState } from "./auth-context";
 
 const AUTH_CONFIG_URL = "/api/v1/auth/config";
 const CLIENT_ID = "jobseeker-frontend";
@@ -130,8 +110,4 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   };
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
-}
-
-export function useAuth(): AuthState | null {
-  return useContext(AuthContext);
 }

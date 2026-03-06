@@ -34,9 +34,13 @@ docker compose exec -T postgres psql -U jobseeker -c "CREATE DATABASE jobseeker_
 echo "Environment ready."
 
 echo ""
-echo "=== 1. Backend tests ==="
+echo "=== 1. Backend lint and tests ==="
 cd backend
 pip install -q -r requirements.txt
+if ! ruff check app; then
+  echo "Backend lint (ruff) failed."
+  exit 1
+fi
 export DATABASE_URL="${TEST_DATABASE_URL:-postgresql://jobseeker:jobseeker@localhost:5432/jobseeker_test}"
 if ! python3 -m pytest tests/ -v --tb=short --cov=app --cov-report=term-missing; then
   echo "Backend tests failed."
@@ -45,8 +49,12 @@ fi
 cd "$ROOT"
 
 echo ""
-echo "=== 2. Frontend tests ==="
+echo "=== 2. Frontend lint and tests ==="
 cd frontend
+if ! npm run lint; then
+  echo "Frontend lint failed."
+  exit 1
+fi
 if ! npm run test -- --run; then
   echo "Frontend tests failed."
   exit 1
@@ -68,13 +76,13 @@ for i in {1..60}; do
 done
 if curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then
   echo "Removing unused models (keeping only tinyllama and nomic-embed-text)..."
-  while IFS= read -r full; do
+  docker compose exec -T ollama ollama list 2>/dev/null | awk 'NR>1 {print $1}' | while IFS= read -r full; do
     base="${full%%:*}"
     case "$base" in
       tinyllama|nomic-embed-text) ;;
       *) echo "  Removing $full"; docker compose exec -T ollama ollama rm "$full" 2>/dev/null || true ;;
     esac
-  done < <(docker compose exec -T ollama ollama list 2>/dev/null | awk 'NR>1 {print $1}' || true)
+  done
   echo "Pulling tinyllama (for resume AI summary)..."
   docker compose exec -T ollama ollama pull tinyllama || true
   echo "Pulling nomic-embed-text (for RAG)..."

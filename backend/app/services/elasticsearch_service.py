@@ -107,6 +107,52 @@ def ensure_index(client: Elasticsearch) -> bool:
         return False
 
 
+def clear_index() -> bool:
+    """Delete the jobs index. Next ensure_index will recreate it. Returns True on success."""
+    set_sync_in_progress(True)
+    try:
+        client = _get_client()
+        if not client:
+            return False
+        try:
+            if client.indices.exists(index=JOBS_INDEX):
+                client.indices.delete(index=JOBS_INDEX)
+                log.info("Deleted Elasticsearch index %s", JOBS_INDEX)
+            return True
+        except Exception as e:
+            log.warning("Failed to clear index %s: %s", JOBS_INDEX, e)
+            return False
+    finally:
+        set_sync_in_progress(False)
+
+
+def get_jobs_not_indexed(jobs: list["JobRow"]) -> list["JobRow"]:
+    """Return jobs that are not yet in the Elasticsearch index."""
+    client = _get_client()
+    if not client:
+        return []
+    try:
+        if not client.indices.exists(index=JOBS_INDEX):
+            return list(jobs)
+    except Exception as e:
+        log.warning("Failed to check index existence: %s", e)
+        return []
+    indexed_ids: set[str] = set()
+    batch_size = 500
+    all_ids = [str(j.id) for j in jobs]
+    for i in range(0, len(all_ids), batch_size):
+        batch = all_ids[i : i + batch_size]
+        try:
+            resp = client.mget(index=JOBS_INDEX, ids=batch)
+            for doc in resp.get("docs", []):
+                if doc.get("found"):
+                    indexed_ids.add(doc["_id"])
+        except Exception as e:
+            log.warning("mget failed for batch: %s", e)
+            return []
+    return [j for j in jobs if str(j.id) not in indexed_ids]
+
+
 def index_job(job: "JobRow", embedding: list[float] | None = None) -> bool:
     """Index a single job. Generates embedding if not provided."""
     client = _get_client()

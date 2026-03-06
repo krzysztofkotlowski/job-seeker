@@ -4,6 +4,7 @@ from fastapi import APIRouter, Query, Depends
 from sqlalchemy import func, literal_column
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.database import get_db
 from app.models.tables import JobRow, DetectedSkillRow
 
@@ -102,7 +103,8 @@ def skills_match(
     if not target_skills:
         return []
 
-    rows = db.query(JobRow).all()
+    limit = get_settings().skills_match_job_limit
+    rows = db.query(JobRow).limit(limit).all()
     results = []
     for row in rows:
         job_skills = {

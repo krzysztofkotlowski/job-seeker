@@ -187,7 +187,9 @@ function normalizeResult(
     by_category: byCategory,
     message: data.message,
     summary: typeof raw.summary === "string" ? raw.summary : undefined,
-    recommendations: Array.isArray(raw.recommendations) ? raw.recommendations : undefined,
+    recommendations: Array.isArray(raw.recommendations)
+      ? raw.recommendations
+      : undefined,
   };
 }
 
@@ -331,7 +333,14 @@ const RecommendationCard = memo(function RecommendationCard({
         "&:hover": { boxShadow: 1 },
       }}
     >
-      <Box sx={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 1 }}>
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "flex-start",
+          justifyContent: "space-between",
+          gap: 1,
+        }}
+      >
         <Box sx={{ flex: 1, minWidth: 0 }}>
           <Typography variant="subtitle2" fontWeight={600} noWrap>
             {title}
@@ -379,13 +388,23 @@ const RecommendationCard = memo(function RecommendationCard({
         </Box>
       </Box>
       {category && (
-        <Chip label={category} size="small" variant="outlined" sx={{ alignSelf: "flex-start" }} />
+        <Chip
+          label={category}
+          size="small"
+          variant="outlined"
+          sx={{ alignSelf: "flex-start" }}
+        />
       )}
     </Paper>
   );
 });
 
-type EmbeddingStatus = { available: boolean; indexed: number; total: number; syncing?: boolean } | null;
+type EmbeddingStatus = {
+  available: boolean;
+  indexed: number;
+  total: number;
+  syncing?: boolean;
+} | null;
 
 export function ResumeAnalysisPage() {
   const [result, setResult] = useState<ResumeAnalyzeResult | null>(null);
@@ -398,7 +417,9 @@ export function ResumeAnalysisPage() {
   const [chartsReady, setChartsReady] = useState(false);
   const [embeddingStatus, setEmbeddingStatus] = useState<EmbeddingStatus>(null);
   const [recommendationsLoading, setRecommendationsLoading] = useState(false);
-  const [recommendationsError, setRecommendationsError] = useState<string | null>(null);
+  const [recommendationsError, setRecommendationsError] = useState<
+    string | null
+  >(null);
   const recommendationsAttemptedRef = useRef(false);
   const safe = normalizeResult(result);
 
@@ -414,7 +435,12 @@ export function ResumeAnalysisPage() {
       const s = await api.embeddingStatus();
       setEmbeddingStatus(s);
     } catch {
-      setEmbeddingStatus({ available: false, indexed: 0, total: 0, syncing: false });
+      setEmbeddingStatus({
+        available: false,
+        indexed: 0,
+        total: 0,
+        syncing: false,
+      });
     }
   }, []);
 
@@ -445,7 +471,9 @@ export function ResumeAnalysisPage() {
       .then((res) => {
         if (!cancelled) {
           setResult((prev) =>
-            prev ? { ...prev, recommendations: res.recommendations ?? [] } : prev,
+            prev
+              ? { ...prev, recommendations: res.recommendations ?? [] }
+              : prev,
           );
         }
       })
@@ -464,7 +492,7 @@ export function ResumeAnalysisPage() {
     };
   }, [
     safe?.extracted_skills,
-    safe?.recommendations?.length,
+    safe?.recommendations,
     recommendationsLoading,
     embeddingStatus?.available,
   ]);
@@ -567,9 +595,7 @@ export function ResumeAnalysisPage() {
         controller.signal,
       );
       const trimmed = fullSummary.trim();
-      setResult((prev) =>
-        prev ? { ...prev, summary: trimmed } : prev,
-      );
+      setResult((prev) => (prev ? { ...prev, summary: trimmed } : prev));
       if (!trimmed) {
         setSummaryError(
           "AI summary unavailable. Ensure Ollama is running and a model is pulled (e.g. ollama pull tinyllama).",
@@ -762,13 +788,18 @@ export function ResumeAnalysisPage() {
                     <Box
                       sx={{
                         display: "grid",
-                        gridTemplateColumns: { xs: "1fr", sm: "repeat(2, 1fr)" },
+                        gridTemplateColumns: {
+                          xs: "1fr",
+                          sm: "repeat(2, 1fr)",
+                        },
                         gap: 2,
                       }}
                     >
                       {(() => {
                         const recs = safe.recommendations;
-                        const scores = recs.map((r) => r.score ?? 0).filter((s) => s > 0);
+                        const scores = recs
+                          .map((r) => r.score ?? 0)
+                          .filter((s) => s > 0);
                         const min = scores.length ? Math.min(...scores) : 0;
                         const max = scores.length ? Math.max(...scores) : 0;
                         return recs.map((rec, i) => (
@@ -802,7 +833,11 @@ export function ResumeAnalysisPage() {
                     >
                       Recommended jobs (hybrid search)
                     </Typography>
-                    <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                    <Typography
+                      variant="body2"
+                      color="text.secondary"
+                      sx={{ mb: 1 }}
+                    >
                       Loading recommendations...
                     </Typography>
                     <LinearProgress sx={{ borderRadius: 1 }} />
@@ -815,7 +850,8 @@ export function ResumeAnalysisPage() {
                   >
                     {embeddingStatus?.available && embeddingStatus.indexed > 0
                       ? "No matching jobs found. Try adjusting your skills or index more jobs."
-                      : embeddingStatus?.available && embeddingStatus.indexed === 0
+                      : embeddingStatus?.available &&
+                          embeddingStatus.indexed === 0
                         ? "Index jobs for RAG recommendations (Import page)."
                         : "Enable RAG and sync embeddings for job recommendations."}
                   </Typography>

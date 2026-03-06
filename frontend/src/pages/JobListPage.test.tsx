@@ -5,6 +5,7 @@ import { vi } from "vitest";
 import { JobListPage } from "./JobListPage";
 import { api } from "../api/client";
 import type { Job } from "../api/types";
+import { ToastProvider } from "../contexts/ToastContext";
 
 vi.mock("../api/client", () => ({
   api: {
@@ -92,7 +93,11 @@ const defaultJob: Job = {
 };
 
 function renderWithRouter(ui: React.ReactElement) {
-  return render(<BrowserRouter>{ui}</BrowserRouter>);
+  return render(
+    <BrowserRouter>
+      <ToastProvider>{ui}</ToastProvider>
+    </BrowserRouter>
+  );
 }
 
 describe("JobListPage", () => {

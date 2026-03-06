@@ -1,6 +1,14 @@
 import { useState } from "react";
+import Box from "@mui/material/Box";
+import TextField from "@mui/material/TextField";
+import Button from "@mui/material/Button";
+import Alert from "@mui/material/Alert";
+import Paper from "@mui/material/Paper";
+import Typography from "@mui/material/Typography";
+import Chip from "@mui/material/Chip";
 import { api } from "../api/client";
 import type { ParsedJob } from "../api/types";
+import { formatParsedSalary } from "../utils/job";
 
 interface Props {
   onJobAdded: () => void;
@@ -53,117 +61,94 @@ export function AddJobForm({ onJobAdded }: Props) {
     }
   };
 
-  const formatSalary = (s: ParsedJob["salary"]) => {
-    if (!s || (!s.min && !s.max)) return "Not specified";
-    const min = s.min?.toLocaleString() ?? "?";
-    const max = s.max?.toLocaleString() ?? "?";
-    return `${min} - ${max} ${s.currency ?? ""} ${s.type ? `(${s.type})` : ""}`.trim();
-  };
-
   return (
-    <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-      <h2 className="text-lg font-semibold text-gray-900 mb-4">Add Job Offer</h2>
-
-      <div className="flex gap-3">
-        <input
+    <Box sx={{ display: "flex", flexDirection: "column", gap: 2, pt: 1 }}>
+      <Box sx={{ display: "flex", gap: 1 }}>
+        <TextField
+          fullWidth
+          size="small"
           type="url"
           value={url}
           onChange={(e) => setUrl(e.target.value)}
           onKeyDown={(e) => e.key === "Enter" && handleParse()}
           placeholder="Paste justjoin.it or nofluffjobs.com URL..."
-          className="flex-1 rounded-lg border border-gray-300 px-4 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:border-transparent"
+          label="Job URL"
         />
-        <button
-          onClick={handleParse}
-          disabled={loading || !url.trim()}
-          className="px-5 py-2.5 bg-indigo-600 text-white text-sm font-medium rounded-lg hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
-        >
+        <Button variant="contained" onClick={handleParse} disabled={loading || !url.trim()}>
           {loading ? "Parsing..." : "Parse"}
-        </button>
-      </div>
+        </Button>
+      </Box>
 
-      {error && (
-        <div className="mt-3 p-3 bg-red-50 border border-red-200 rounded-lg text-sm text-red-700">
-          {error}
-        </div>
-      )}
-
-      {duplicate && (
-        <div className="mt-3 p-3 bg-amber-50 border border-amber-200 rounded-lg text-sm text-amber-700">
-          <span className="font-medium">Duplicate detected:</span> {duplicate}
-        </div>
-      )}
+      {error && <Alert severity="error">{error}</Alert>}
+      {duplicate && <Alert severity="warning">Duplicate detected: {duplicate}</Alert>}
 
       {preview && (
-        <div className="mt-4 border border-gray-200 rounded-lg p-4 bg-gray-50 space-y-3">
-          <div className="flex items-start justify-between">
-            <div>
-              <h3 className="font-semibold text-gray-900">{preview.title}</h3>
-              <p className="text-sm text-gray-600">{preview.company} &middot; {preview.location.join(", ") || "No location"}</p>
-            </div>
-            <span className="text-xs px-2 py-1 bg-gray-200 rounded-full text-gray-600">
-              {preview.source}
-            </span>
-          </div>
+        <Paper variant="outlined" sx={{ p: 2, borderColor: "divider" }}>
+          <Box sx={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", mb: 2 }}>
+            <Box>
+              <Typography variant="subtitle1" fontWeight={600}>{preview.title}</Typography>
+              <Typography variant="body2" color="text.secondary">
+                {preview.company} · {preview.location.join(", ") || "No location"}
+              </Typography>
+            </Box>
+            <Chip label={preview.source} size="small" variant="outlined" />
+          </Box>
 
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-sm">
-            <div>
-              <span className="text-gray-500">Salary</span>
-              <p className="font-medium">{formatSalary(preview.salary)}</p>
-            </div>
-            <div>
-              <span className="text-gray-500">Seniority</span>
-              <p className="font-medium">{preview.seniority || "N/A"}</p>
-            </div>
-            <div>
-              <span className="text-gray-500">Work Type</span>
-              <p className="font-medium">{preview.work_type || "N/A"}</p>
-            </div>
-            <div>
-              <span className="text-gray-500">Contract</span>
-              <p className="font-medium">{preview.employment_types.join(", ") || "N/A"}</p>
-            </div>
-          </div>
+          <Box sx={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 2, mb: 2 }}>
+            <Box>
+              <Typography variant="caption" color="text.secondary">Salary</Typography>
+              <Typography variant="body2">{formatParsedSalary(preview.salary)}</Typography>
+            </Box>
+            <Box>
+              <Typography variant="caption" color="text.secondary">Seniority</Typography>
+              <Typography variant="body2">{preview.seniority || "N/A"}</Typography>
+            </Box>
+            <Box>
+              <Typography variant="caption" color="text.secondary">Work Type</Typography>
+              <Typography variant="body2">{preview.work_type || "N/A"}</Typography>
+            </Box>
+            <Box>
+              <Typography variant="caption" color="text.secondary">Contract</Typography>
+              <Typography variant="body2">{preview.employment_types.join(", ") || "N/A"}</Typography>
+            </Box>
+          </Box>
 
           {preview.skills_required.length > 0 && (
-            <div>
-              <span className="text-xs text-gray-500 uppercase tracking-wide">Required Skills</span>
-              <div className="flex flex-wrap gap-1.5 mt-1">
+            <Box sx={{ mb: 1 }}>
+              <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
+                Required Skills
+              </Typography>
+              <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mt: 0.5 }}>
                 {preview.skills_required.map((s) => (
-                  <span key={s} className="px-2 py-0.5 bg-indigo-100 text-indigo-700 text-xs rounded-full">{s}</span>
+                  <Chip key={s} label={s} size="small" color="primary" variant="outlined" sx={{ height: 22, fontSize: 11 }} />
                 ))}
-              </div>
-            </div>
+              </Box>
+            </Box>
           )}
 
           {preview.skills_nice_to_have.length > 0 && (
-            <div>
-              <span className="text-xs text-gray-500 uppercase tracking-wide">Nice to Have</span>
-              <div className="flex flex-wrap gap-1.5 mt-1">
+            <Box sx={{ mb: 2 }}>
+              <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
+                Nice to Have
+              </Typography>
+              <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mt: 0.5 }}>
                 {preview.skills_nice_to_have.map((s) => (
-                  <span key={s} className="px-2 py-0.5 bg-gray-200 text-gray-600 text-xs rounded-full">{s}</span>
+                  <Chip key={s} label={s} size="small" variant="outlined" sx={{ height: 22, fontSize: 11 }} />
                 ))}
-              </div>
-            </div>
+              </Box>
+            </Box>
           )}
 
-          <div className="flex gap-3 pt-2">
-            <button
-              onClick={handleSave}
-              disabled={saving}
-              className="px-5 py-2 bg-green-600 text-white text-sm font-medium rounded-lg hover:bg-green-700 disabled:opacity-50 transition-colors"
-            >
+          <Box sx={{ display: "flex", gap: 1, pt: 1 }}>
+            <Button variant="contained" color="success" onClick={handleSave} disabled={saving}>
               {saving ? "Saving..." : "Save & Track"}
-            </button>
-            <button
-              onClick={() => { setPreview(null); setUrl(""); }}
-              className="px-5 py-2 bg-gray-200 text-gray-700 text-sm font-medium rounded-lg hover:bg-gray-300 transition-colors"
-            >
+            </Button>
+            <Button variant="outlined" onClick={() => { setPreview(null); setUrl(""); }}>
               Discard
-            </button>
-          </div>
-        </div>
+            </Button>
+          </Box>
+        </Paper>
       )}
-    </div>
+    </Box>
   );
 }

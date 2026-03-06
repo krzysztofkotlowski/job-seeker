@@ -1,0 +1,12 @@
+# Ruff configuration - gradual adoption
+target-version = "py311"
+line-length = 120
+
+[lint]
+select = ["E", "F", "W"]
+ignore = [
+    "E402",  # Module level import not at top (existing pattern)
+    "F841",  # Unused variable (pre-existing)
+    "E741",  # Ambiguous variable name
+    "E501",  # Line too long
+]

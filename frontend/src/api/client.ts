@@ -147,6 +147,10 @@ export const api = {
   embeddingStatus: () =>
     request<{ available: boolean; indexed: number; total: number; syncing?: boolean }>("/jobs/embedding-status"),
 
+  /** Clear the embedding index. */
+  clearEmbeddingIndex: () =>
+    request<{ cleared: boolean }>("/jobs/embedding-index", { method: "DELETE" }),
+
   /** Sync embeddings (non-streaming). */
   syncEmbeddings: () =>
     request<{ indexed: number; total: number }>("/jobs/sync-embeddings", {
@@ -157,11 +161,13 @@ export const api = {
   syncEmbeddingsStream: async (
     onProgress: (indexed: number, total: number, done: boolean) => void,
     signal?: AbortSignal,
+    mode?: "full" | "incremental",
   ): Promise<{ indexed: number; total: number }> => {
     const token = await getTokenForRequest();
     const headers = new Headers();
     if (token) headers.set("Authorization", `Bearer ${token}`);
-    const res = await fetch(`${BASE}/jobs/sync-embeddings/stream`, {
+    const url = `${BASE}/jobs/sync-embeddings/stream${mode ? `?mode=${mode}` : ""}`;
+    const res = await fetch(url, {
       method: "POST",
       headers,
       signal,
@@ -175,11 +181,13 @@ export const api = {
     if (!reader) throw new Error("No response body");
     const decoder = new TextDecoder();
     let lastResult = { indexed: 0, total: 0 };
+    let buffer = "";
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      const text = decoder.decode(value, { stream: true });
-      const lines = text.split("\n");
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
       for (const line of lines) {
         if (line.startsWith("data: ")) {
           try {

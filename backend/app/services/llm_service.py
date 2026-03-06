@@ -10,6 +10,18 @@ import httpx
 
 log = logging.getLogger(__name__)
 
+# Patterns that may indicate prompt injection attempts
+_INJECTION_PATTERNS = (
+    r"ignore\s+(previous|all|above)\s+instructions",
+    r"disregard\s+(previous|all|above)",
+    r"you\s+are\s+now\s+",
+    r"pretend\s+you\s+are",
+    r"act\s+as\s+if\s+you",
+    r"system\s*:\s*",
+    r"<\|[a-z_]+\|>",  # special tokens
+)
+_INJECTION_RE = re.compile("|".join(f"({p})" for p in _INJECTION_PATTERNS), re.IGNORECASE)
+
 
 @dataclass
 class LLMConfig:
@@ -179,6 +191,34 @@ def _ensure_markdown(text: str) -> str:
     return "\n\n".join(out)
 
 
+def _sanitize_for_prompt(text: str, max_len: int = 500) -> str:
+    """
+    Sanitize user-provided text before including in LLM prompts.
+    Reduces risk of prompt injection.
+    """
+    if not text or not isinstance(text, str):
+        return ""
+    # Keep only printable ASCII + common Unicode (letters, numbers, basic punct)
+    cleaned = "".join(c for c in text if c.isprintable() or c in " \n\t")
+    # Remove lines that match injection patterns
+    lines = cleaned.split("\n")
+    safe_lines = []
+    for line in lines:
+        stripped = line.strip()
+        if _INJECTION_RE.search(stripped):
+            continue
+        safe_lines.append(line)
+    result = "\n".join(safe_lines).strip()
+    return result[:max_len] if len(result) > max_len else result
+
+
+def _sanitize_skill(s: str) -> str:
+    """Sanitize a single skill string."""
+    if not s or not isinstance(s, str):
+        return ""
+    return _sanitize_for_prompt(s, max_len=80)
+
+
 def _is_valid_url(u: str) -> bool:
     u = (u or "").strip()
     return len(u) > 20 and (u.startswith("http://") or u.startswith("https://"))
@@ -203,15 +243,16 @@ def _build_prompt(
     by_category: list[dict],
 ) -> str:
     """Build a short, structured prompt (skills and categories only; no jobs)."""
+    # Sanitize user-provided content to reduce prompt injection risk (extracted_skills used via cat_lines)
     top_cats = sorted(by_category, key=lambda c: c.get("match_score", 0), reverse=True)[:5]
     cat_lines = []
     for c in top_cats:
-        cat = c.get("category", "?")
+        cat = _sanitize_for_prompt(str(c.get("category", "?")), max_len=50)
         score = c.get("match_score", 0)
         matching = c.get("matching_skills") or []
         to_add = c.get("skills_to_add") or []
-        match_skills = ", ".join(s.get("skill", "") for s in matching[:6]) if matching else "none"
-        add_skills = ", ".join(s.get("skill", "") for s in to_add[:4]) if to_add else "none"
+        match_skills = ", ".join(_sanitize_skill(s.get("skill", "")) for s in matching[:6]) if matching else "none"
+        add_skills = ", ".join(_sanitize_skill(s.get("skill", "")) for s in to_add[:4]) if to_add else "none"
         cat_lines.append(f"- {cat} ({score}/100): strengths: {match_skills}. Add: {add_skills}")
 
     prompt = f"""Analyze this resume match data. The data is provided here—do not say you lack access to it.

@@ -17,6 +17,8 @@ import Switch from "@mui/material/Switch";
 import CircularProgress from "@mui/material/CircularProgress";
 import { api } from "../api/client";
 import type { AnalyticsData } from "../api/types";
+import { useToast } from "../contexts/useToast";
+import { STATUS_TAB_COLORS } from "../utils/job";
 
 const COLORS = [
   "#6366f1", "#8b5cf6", "#a78bfa", "#c4b5fd",
@@ -24,19 +26,11 @@ const COLORS = [
   "#312e81", "#4338ca", "#6d28d9", "#9333ea",
 ];
 
-const STATUS_COLORS: Record<string, string> = {
-  new: "#6366f1",
-  seen: "#9ca3af",
-  applied: "#0ea5e9",
-  interview: "#f59e0b",
-  offer: "#22c55e",
-  rejected: "#ef4444",
-};
-
 const fmt = (n: number | null | undefined) =>
   n != null ? n.toLocaleString("pl-PL", { maximumFractionDigits: 0 }) : "-";
 
 export function DashboardPage() {
+  const toast = useToast();
   const [data, setData] = useState<AnalyticsData | null>(null);
   const [loading, setLoading] = useState(true);
   const [seniorities, setSeniorities] = useState<string[]>([]);
@@ -44,18 +38,19 @@ export function DashboardPage() {
   const [uniqueOffers, setUniqueOffers] = useState(false);
 
   useEffect(() => {
-    api.listSeniorities().then(setSeniorities).catch(() => {});
-  }, []);
+    api.listSeniorities().then(setSeniorities).catch((e) => toast.showError(e instanceof Error ? e.message : "Failed to load seniorities"));
+  }, [toast]);
 
   useEffect(() => {
-    setLoading(true);
+    queueMicrotask(() => setLoading(true));
     api.analytics({
       seniority: selectedSeniority || undefined,
       group_duplicates: uniqueOffers,
     })
       .then(setData)
+      .catch((e) => toast.showError(e instanceof Error ? e.message : "Failed to load analytics"))
       .finally(() => setLoading(false));
-  }, [selectedSeniority, uniqueOffers]);
+  }, [selectedSeniority, uniqueOffers, toast]);
 
   if (loading) {
     return (
@@ -151,7 +146,7 @@ export function DashboardPage() {
                 outerRadius={90}
                 label={({ name, value }) => `${name} (${value})`}
               >
-                {statusData.map((entry) => <Cell key={entry.name} fill={STATUS_COLORS[entry.name] ?? COLORS[0]} />)}
+                {statusData.map((entry) => <Cell key={entry.name} fill={STATUS_TAB_COLORS[entry.name] ?? COLORS[0]} />)}
               </Pie>
               <Tooltip />
               <Legend />

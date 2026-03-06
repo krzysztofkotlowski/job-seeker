@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { BrowserRouter, Routes, Route, NavLink, Navigate } from "react-router-dom";
 import { ThemeProvider, createTheme, CssBaseline } from "@mui/material";
 import AppBar from "@mui/material/AppBar";
@@ -11,13 +12,17 @@ import Tooltip from "@mui/material/Tooltip";
 import WorkOutlineIcon from "@mui/icons-material/WorkOutline";
 import LoginIcon from "@mui/icons-material/Login";
 import LogoutIcon from "@mui/icons-material/Logout";
-import { AuthProvider, useAuth } from "./auth/AuthContext";
-import { JobListPage } from "./pages/JobListPage";
-import { JobDetailPage } from "./pages/JobDetailPage";
-import { SkillsPage } from "./pages/SkillsPage";
-import { ImportPage } from "./pages/ImportPage";
-import { DashboardPage } from "./pages/DashboardPage";
-import { ResumeAnalysisPage } from "./pages/ResumeAnalysisPage";
+import CircularProgress from "@mui/material/CircularProgress";
+import { AuthProvider } from "./auth/AuthContext";
+import { useAuth } from "./auth/useAuth";
+import { ToastProvider } from "./contexts/ToastContext";
+
+const JobListPage = lazy(() => import("./pages/JobListPage").then((m) => ({ default: m.JobListPage })));
+const JobDetailPage = lazy(() => import("./pages/JobDetailPage").then((m) => ({ default: m.JobDetailPage })));
+const SkillsPage = lazy(() => import("./pages/SkillsPage").then((m) => ({ default: m.SkillsPage })));
+const ImportPage = lazy(() => import("./pages/ImportPage").then((m) => ({ default: m.ImportPage })));
+const DashboardPage = lazy(() => import("./pages/DashboardPage").then((m) => ({ default: m.DashboardPage })));
+const ResumeAnalysisPage = lazy(() => import("./pages/ResumeAnalysisPage").then((m) => ({ default: m.ResumeAnalysisPage })));
 
 const theme = createTheme({
   palette: {
@@ -115,6 +120,11 @@ function AppContent() {
           </AppBar>
 
           <Box sx={{ maxWidth: 1200, mx: "auto", px: 2, py: 3 }}>
+            <Suspense fallback={
+              <Box sx={{ display: "flex", justifyContent: "center", py: 8 }}>
+                <CircularProgress />
+              </Box>
+            }>
             <Routes>
               <Route path="/" element={<Navigate to="/jobs" replace />} />
               <Route path="/jobs" element={<JobListPage />} />
@@ -124,6 +134,7 @@ function AppContent() {
               <Route path="/resume" element={<ResumeAnalysisPage />} />
               <Route path="/import" element={<ImportPage />} />
             </Routes>
+            </Suspense>
           </Box>
         </Box>
       </BrowserRouter>
@@ -134,9 +145,11 @@ function App() {
   return (
     <ThemeProvider theme={theme}>
       <CssBaseline enableColorScheme />
-      <AuthProvider>
-        <AppContent />
-      </AuthProvider>
+      <ToastProvider>
+        <AuthProvider>
+          <AppContent />
+        </AuthProvider>
+      </ToastProvider>
     </ThemeProvider>
   );
 }

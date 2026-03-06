@@ -7,6 +7,7 @@ import LinearProgress from "@mui/material/LinearProgress";
 import Alert from "@mui/material/Alert";
 import Chip from "@mui/material/Chip";
 import Collapse from "@mui/material/Collapse";
+import Tooltip from "@mui/material/Tooltip";
 import { api } from "../api/client";
 import type { ImportStatus, ImportTask, ImportTaskStatus } from "../api/types";
 
@@ -69,12 +70,18 @@ export function ImportPage() {
 
   // Poll embedding status when sync might be in progress (startup or indexed < total)
   useEffect(() => {
-    if (!embeddingStatus?.available) return;
-    const mightBeSyncing = embeddingStatus.syncing || (embeddingStatus.total > 0 && embeddingStatus.indexed < embeddingStatus.total);
+    const mightBeSyncing =
+      embeddingSyncing ||
+      embeddingStatus?.syncing ||
+      (embeddingStatus &&
+        embeddingStatus.total > 0 &&
+        embeddingStatus.indexed < embeddingStatus.total);
     if (!mightBeSyncing) return;
-    const id = setInterval(fetchEmbeddingStatus, 3000);
+    if (!embeddingStatus?.available && !embeddingSyncing) return;
+    const interval = embeddingSyncing ? 1500 : 3000;
+    const id = setInterval(fetchEmbeddingStatus, interval);
     return () => clearInterval(id);
-  }, [embeddingStatus, fetchEmbeddingStatus]);
+  }, [embeddingSyncing, embeddingStatus, fetchEmbeddingStatus]);
 
   // If any task is resumable (error/cancelled with pending), auto-start import once
   useEffect(() => {
@@ -187,13 +194,15 @@ export function ImportPage() {
     } catch { /* ignore */ }
   };
 
-  const handleSyncEmbeddings = async () => {
+  const handleSyncEmbeddings = async (mode: "full" | "incremental") => {
     setEmbeddingSyncing(true);
     setEmbeddingError(null);
     setEmbeddingProgress({ indexed: 0, total: 0 });
     try {
       await api.syncEmbeddingsStream(
         (indexed, total) => setEmbeddingProgress({ indexed, total }),
+        undefined,
+        mode,
       );
       await fetchEmbeddingStatus();
     } catch (e) {
@@ -236,27 +245,45 @@ export function ImportPage() {
       </Paper>
 
       <Paper sx={{ p: 3 }}>
-        <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", mb: 2 }}>
-          <Box>
-            <Typography variant="h6" fontWeight={600}>Vector Index (RAG)</Typography>
-            <Typography variant="body2" color="text.secondary">
-              Index job offers for semantic search. Enables AI resume summaries to find relevant jobs by meaning, not
-              just keywords. Run after importing jobs. May take several minutes for large datasets.
-            </Typography>
-          </Box>
-          {embeddingStatus?.available && (
-            <Button
-              variant="contained"
-              color="secondary"
-              size="medium"
-              onClick={handleSyncEmbeddings}
-              disabled={embeddingSyncing || embeddingStatus.syncing}
-              sx={{ minWidth: 140, fontWeight: 600 }}
-            >
-              {embeddingSyncing || embeddingStatus.syncing ? "Syncing..." : "Index for RAG"}
-            </Button>
-          )}
+        <Box sx={{ mb: 2 }}>
+          <Typography variant="h6" fontWeight={600}>Vector Index (RAG)</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+            Index job offers for semantic search. Enables AI resume summaries to find relevant jobs by meaning, not
+            just keywords. Run after importing jobs. May take several minutes for large datasets.
+          </Typography>
         </Box>
+        {embeddingStatus?.available && (
+          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 2, alignItems: "center", mb: 2 }}>
+            <Tooltip title="Index only jobs not yet in RAG. Fast for new imports.">
+              <span>
+                <Button
+                  variant="contained"
+                  color="secondary"
+                  size="medium"
+                  onClick={() => handleSyncEmbeddings("incremental")}
+                  disabled={embeddingSyncing || embeddingStatus.syncing}
+                  sx={{ minWidth: 160, fontWeight: 600 }}
+                >
+                  {embeddingSyncing || embeddingStatus.syncing ? "Syncing..." : "Add missing jobs"}
+                </Button>
+              </span>
+            </Tooltip>
+            <Tooltip title="Clear index and rebuild from scratch. Use after bulk changes.">
+              <span>
+                <Button
+                  variant="outlined"
+                  color="secondary"
+                  size="medium"
+                  onClick={() => handleSyncEmbeddings("full")}
+                  disabled={embeddingSyncing || embeddingStatus.syncing}
+                  sx={{ minWidth: 140 }}
+                >
+                  Re-index all
+                </Button>
+              </span>
+            </Tooltip>
+          </Box>
+        )}
         {embeddingError && <Alert severity="error" sx={{ mb: 2 }}>{embeddingError}</Alert>}
         {embeddingStatus?.available && (
           <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>

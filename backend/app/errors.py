@@ -38,7 +38,13 @@ def setup_exception_handlers(app: FastAPI) -> None:
 
     @app.exception_handler(Exception)
     async def unhandled_exception_handler(request: Request, exc: Exception) -> JSONResponse:  # type: ignore[override]
-        log.exception("Unhandled error while processing request %s %s", request.method, request.url.path)
+        request_id = getattr(request.state, "request_id", None)
+        log.exception(
+            "Unhandled error while processing request %s %s (request_id=%s)",
+            request.method,
+            request.url.path,
+            request_id,
+        )
         return JSONResponse(
             status_code=500,
             content={"error": {"code": "INTERNAL_SERVER_ERROR", "message": "Something went wrong. Please try again."}},
