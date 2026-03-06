@@ -170,6 +170,11 @@ export interface ResumeByCategory {
   skills_to_add: SkillWithWeight[];
 }
 
+export interface ResumeRecommendation {
+  job: Pick<Job, "id" | "title" | "company" | "url" | "category">;
+  score?: number;
+}
+
 export interface ResumeAnalyzeResult {
   extracted_skills: string[];
   match_count: number;
@@ -177,4 +182,5 @@ export interface ResumeAnalyzeResult {
   by_category: ResumeByCategory[];
   message?: string;
   summary?: string;
+  recommendations?: ResumeRecommendation[];
 }

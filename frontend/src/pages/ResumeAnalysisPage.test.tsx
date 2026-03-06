@@ -11,7 +11,7 @@ vi.mock("../api/client", () => ({
     listCategories: vi.fn().mockResolvedValue(["Backend", "Frontend"]),
     resumeAnalyze: vi.fn(),
     resumeSummarize: vi.fn(),
-    resumeSummarizeStream: vi.fn().mockResolvedValue(""),
+    resumeSummarizeStream: vi.fn().mockResolvedValue({ summary: "", recommendations: [] }),
   },
 }));
 

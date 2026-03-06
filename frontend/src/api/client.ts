@@ -9,6 +9,7 @@ import type {
   DetectedSkill,
   AnalyticsData,
   ResumeAnalyzeResult,
+  ResumeRecommendation,
 } from "./types";
 import { getTokenForRequest } from "../auth/tokenProvider";
 
@@ -262,6 +263,13 @@ export const api = {
     return res.json();
   },
 
+  /** Fetch hybrid search recommendations for extracted skills. Called in background after analyze. */
+  resumeRecommendations: (extracted_skills: string[]) =>
+    request<{ recommendations: ResumeRecommendation[] }>("/resume/recommendations", {
+      method: "POST",
+      body: JSON.stringify({ extracted_skills }),
+    }),
+
   /** Generate AI summary for resume analysis. Call after analyze. */
   resumeSummarize: async (
     data: { extracted_skills: string[]; matches: unknown[]; by_category: unknown[] },
@@ -285,12 +293,12 @@ export const api = {
     return res.json();
   },
 
-  /** Stream AI summary. Calls onChunk for each chunk, returns final full text. */
+  /** Stream AI summary. Calls onChunk for each chunk, returns {summary, recommendations}. */
   resumeSummarizeStream: async (
     data: { extracted_skills: string[]; matches: unknown[]; by_category: unknown[] },
     onChunk: (chunk: string) => void,
     signal?: AbortSignal,
-  ): Promise<string> => {
+  ): Promise<{ summary: string; recommendations: ResumeRecommendation[] }> => {
     const token = await getTokenForRequest();
     const headers = new Headers();
     headers.set("Content-Type", "application/json");
@@ -310,6 +318,7 @@ export const api = {
     if (!reader) throw new Error("No response body");
     const decoder = new TextDecoder();
     let full = "";
+    let recommendations: ResumeRecommendation[] = [];
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
@@ -318,10 +327,17 @@ export const api = {
       for (const line of lines) {
         if (line.startsWith("data: ")) {
           try {
-            const parsed = JSON.parse(line.slice(6)) as { chunk?: string };
+            const parsed = JSON.parse(line.slice(6)) as {
+              chunk?: string;
+              done?: boolean;
+              recommendations?: ResumeRecommendation[];
+            };
             if (typeof parsed.chunk === "string") {
               full += parsed.chunk;
               onChunk(parsed.chunk);
+            }
+            if (parsed.done && Array.isArray(parsed.recommendations)) {
+              recommendations = parsed.recommendations;
             }
           } catch {
             // ignore parse errors
@@ -329,6 +345,6 @@ export const api = {
         }
       }
     }
-    return full;
+    return { summary: full, recommendations };
   },
 };
