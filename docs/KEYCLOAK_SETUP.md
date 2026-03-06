@@ -1,10 +1,36 @@
 # Keycloak Setup for Job Seeker
 
+## Optional Authentication
+
+**Auth is optional.** The app works without Keycloak. Users can browse jobs, run resume analysis, and use most features without logging in. Login is only required when you want to:
+
+- Save resume analyses to your account
+- Use protected endpoints (import, backup)
+
+### Enabling Keycloak (Docker Compose)
+
+By default, Keycloak is **disabled**. To enable auth:
+
+1. Start Keycloak with the `keycloak` profile:
+   ```bash
+   docker compose --profile keycloak up --build
+   ```
+
+2. Set `KEYCLOAK_ENABLED=true` for the backend. Create a `.env` file in the project root:
+   ```
+   KEYCLOAK_ENABLED=true
+   ```
+   Then run: `docker compose --profile keycloak up --build`
+
+   Or pass it inline: `KEYCLOAK_ENABLED=true docker compose --profile keycloak up`
+
+3. Import the realm (see below) and create a user.
+
 ## Pre-configured (Docker Compose)
 
-When using `docker compose up`, the **jobseeker** realm and **jobseeker-frontend** client are imported automatically from `keycloak/import/jobseeker-realm.json`. No manual setup needed.
+When using Keycloak, the **jobseeker** realm and **jobseeker-frontend** client can be imported from `keycloak/import/jobseeker-realm.json`. Configure Keycloak to import this on startup if needed.
 
-You still need to create a user to log in:
+Create a user to log in:
 
 1. Access **http://localhost:8080** (admin console)
 2. Log in with `admin` / `admin`
@@ -41,5 +67,5 @@ Realm settings → Security defenses → Headers → **SSL required:** None
 
 ## Environment
 
-- **Backend:** `KEYCLOAK_URL` (internal, e.g. `http://keycloak:8080`), `KEYCLOAK_PUBLIC_URL` (browser, e.g. `http://localhost:8080`), `KEYCLOAK_REALM`
+- **Backend:** `KEYCLOAK_URL` (internal, e.g. `http://keycloak:8080`), `KEYCLOAK_PUBLIC_URL` (browser, e.g. `http://localhost:8080`), `KEYCLOAK_REALM`, `KEYCLOAK_ENABLED` (must be `true` to enable auth; default `false`)
 - **Frontend:** Gets config from `/api/v1/auth/config` (no env vars needed)
