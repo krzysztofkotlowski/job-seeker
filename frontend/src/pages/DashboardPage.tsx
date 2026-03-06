@@ -258,7 +258,17 @@ export function DashboardPage() {
       <Box sx={{ display: "grid", gridTemplateColumns: { md: "1fr 1fr" }, gap: 3 }}>
         {data.top_companies.length > 0 && (
           <ChartCard title="Top Companies">
-            <Box sx={{ maxHeight: 320, overflow: "auto" }}>
+            <Box
+              sx={{
+                maxHeight: 320,
+                overflow: "auto",
+                "&::-webkit-scrollbar": { width: 8 },
+                "&::-webkit-scrollbar-track": { bgcolor: "background.default" },
+                "&::-webkit-scrollbar-thumb": { bgcolor: "grey.600", borderRadius: 1 },
+                "&::-webkit-scrollbar-thumb:hover": { bgcolor: "grey.500" },
+                scrollbarColor: (theme) => `${theme.palette.grey[600]} ${theme.palette.background.default}`,
+              }}
+            >
               {data.top_companies.map((c, i) => (
                 <Box key={c.company} sx={{ display: "flex", justifyContent: "space-between", py: 0.75, px: 0.5, borderBottom: 1, borderColor: "divider" }}>
                   <Box sx={{ display: "flex", gap: 1, minWidth: 0 }}>
@@ -274,7 +284,17 @@ export function DashboardPage() {
 
         {data.top_locations.length > 0 && (
           <ChartCard title="Top Locations">
-            <Box sx={{ maxHeight: 320, overflow: "auto" }}>
+            <Box
+              sx={{
+                maxHeight: 320,
+                overflow: "auto",
+                "&::-webkit-scrollbar": { width: 8 },
+                "&::-webkit-scrollbar-track": { bgcolor: "background.default" },
+                "&::-webkit-scrollbar-thumb": { bgcolor: "grey.600", borderRadius: 1 },
+                "&::-webkit-scrollbar-thumb:hover": { bgcolor: "grey.500" },
+                scrollbarColor: (theme) => `${theme.palette.grey[600]} ${theme.palette.background.default}`,
+              }}
+            >
               {data.top_locations.map((l, i) => (
                 <Box key={l.location} sx={{ display: "flex", justifyContent: "space-between", py: 0.75, px: 0.5, borderBottom: 1, borderColor: "divider" }}>
                   <Box sx={{ display: "flex", gap: 1, minWidth: 0 }}>

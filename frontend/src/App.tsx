@@ -7,6 +7,7 @@ import Box from "@mui/material/Box";
 import Tab from "@mui/material/Tab";
 import Tabs from "@mui/material/Tabs";
 import Button from "@mui/material/Button";
+import Tooltip from "@mui/material/Tooltip";
 import WorkOutlineIcon from "@mui/icons-material/WorkOutline";
 import LoginIcon from "@mui/icons-material/Login";
 import LogoutIcon from "@mui/icons-material/Logout";
@@ -66,35 +67,50 @@ function AppContent() {
                   />
                 ))}
               </Tabs>
-              {auth?.config?.enabled && (
-                auth?.authenticated ? (
-                  <Button
-                    size="small"
-                    startIcon={<LogoutIcon />}
-                    onClick={() => auth.logout()}
-                    sx={{ color: "inherit", opacity: 0.85, "&:hover": { opacity: 1 }, mr: 1 }}
-                  >
-                    Logout
-                  </Button>
-                ) : (
-                  <Button
-                    size="small"
-                    startIcon={<LoginIcon />}
-                    onClick={() => auth.login()}
-                    sx={{ color: "inherit", opacity: 0.85, "&:hover": { opacity: 1 }, mr: 1 }}
-                  >
-                    Login
-                  </Button>
-                )
-              )}
-              <Tab
-                label="API Docs"
-                component="a"
-                href="/api/v1/docs"
-                target="_blank"
-                rel="noopener noreferrer"
-                sx={{ opacity: 0.7, "&:hover": { opacity: 1 } }}
-              />
+              <Box sx={{ display: "flex", alignItems: "center", gap: 0.5, flexShrink: 0 }}>
+                {auth?.config?.enabled ? (
+                  auth?.authenticated ? (
+                    <Button
+                      size="small"
+                      startIcon={<LogoutIcon />}
+                      onClick={() => auth.logout()}
+                      sx={{ color: "inherit", opacity: 0.85, "&:hover": { opacity: 1 } }}
+                    >
+                      Logout
+                    </Button>
+                  ) : (
+                    <Button
+                      size="small"
+                      startIcon={<LoginIcon />}
+                      onClick={() => auth.login()}
+                      sx={{ color: "inherit", opacity: 0.85, "&:hover": { opacity: 1 } }}
+                    >
+                      Login
+                    </Button>
+                  )
+                ) : auth?.config !== null ? (
+                  <Tooltip title="Authentication not configured">
+                    <span>
+                      <Button
+                        size="small"
+                        startIcon={<LoginIcon />}
+                        disabled
+                        sx={{ color: "inherit", opacity: 0.5 }}
+                      >
+                        Login
+                      </Button>
+                    </span>
+                  </Tooltip>
+                ) : null}
+                <Tab
+                  label="API Docs"
+                  component="a"
+                  href="/api/v1/docs"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  sx={{ opacity: 0.7, "&:hover": { opacity: 1 } }}
+                />
+              </Box>
             </Toolbar>
           </AppBar>
 
@@ -117,7 +133,7 @@ function AppContent() {
 function App() {
   return (
     <ThemeProvider theme={theme}>
-      <CssBaseline />
+      <CssBaseline enableColorScheme />
       <AuthProvider>
         <AppContent />
       </AuthProvider>
