@@ -1,5 +1,7 @@
 services:
   keycloak:
+    profiles:
+      - keycloak
     image: quay.io/keycloak/keycloak:latest
     command: start-dev
     environment:
@@ -68,8 +70,10 @@ services:
       - "host.docker.internal:host-gateway"
     environment:
       - DATABASE_URL=postgresql://jobseeker:jobseeker@postgres:5432/jobseeker
-      - KEYCLOAK_URL=http://host.docker.internal:8080
+      - KEYCLOAK_URL=http://keycloak:8080
+      - KEYCLOAK_PUBLIC_URL=http://localhost:8080
       - KEYCLOAK_REALM=jobseeker
+      - KEYCLOAK_ENABLED=${KEYCLOAK_ENABLED:-false}
       - LLM_URL=http://ollama:11434
       # LLM: change LLM_MODEL to llama3.2:3b, mistral, etc. for better quality
       - LLM_MODEL=tinyllama
@@ -77,6 +81,7 @@ services:
       - LLM_TIMEOUT=30
       - LLM_SUMMARIZE_TIMEOUT=90
       - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - ES_TIMEOUT=30
       - EMBED_MODEL=nomic-embed-text
       - RAG_ENABLED=true
     depends_on:

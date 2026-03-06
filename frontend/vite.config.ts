@@ -6,7 +6,10 @@ export default defineConfig({
   plugins: [react(), tailwindcss()],
   server: {
     proxy: {
-      "/api": "http://localhost:8000",
+      "/api": {
+        target: "http://localhost:8000",
+        proxyTimeout: 150000, // 150s for resume analyze (RAG + large DB)
+      },
     },
   },
 });
