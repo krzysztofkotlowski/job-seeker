@@ -125,11 +125,11 @@ async def health():
 @app.get("/api/v1/auth/config")
 def auth_config():
     """Return Keycloak config for frontend when auth is enabled."""
-    from app.auth import is_auth_enabled, KEYCLOAK_URL, KEYCLOAK_REALM
+    from app.auth import is_auth_enabled, KEYCLOAK_PUBLIC_URL, KEYCLOAK_REALM
     if not is_auth_enabled():
         return {"enabled": False}
     return {
         "enabled": True,
-        "url": KEYCLOAK_URL,
+        "url": KEYCLOAK_PUBLIC_URL,
         "realm": KEYCLOAK_REALM,
     }

@@ -14,6 +14,7 @@ log = logging.getLogger(__name__)
 KEYCLOAK_URL = os.environ.get("KEYCLOAK_URL", "").rstrip("/")
 KEYCLOAK_PUBLIC_URL = os.environ.get("KEYCLOAK_PUBLIC_URL", "").rstrip("/") or KEYCLOAK_URL
 KEYCLOAK_REALM = os.environ.get("KEYCLOAK_REALM", "jobseeker")
+KEYCLOAK_ENABLED = os.environ.get("KEYCLOAK_ENABLED", "false").lower() in ("true", "1", "yes")
 
 security = HTTPBearer(auto_error=False)
 
@@ -63,7 +64,7 @@ def get_current_user_optional(
     """
     Extract and validate user from Bearer token. Returns None if auth is disabled or no token.
     """
-    if not KEYCLOAK_URL:
+    if not is_auth_enabled():
         return None
     if not credentials or not credentials.credentials:
         return None
@@ -81,7 +82,7 @@ def get_current_user(
     user: Annotated[dict | None, Depends(get_current_user_optional)],
 ) -> dict:
     """Require authenticated user. Raises 401 if not authenticated."""
-    if not KEYCLOAK_URL:
+    if not is_auth_enabled():
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication is not configured",
@@ -96,8 +97,8 @@ def get_current_user(
 
 
 def is_auth_enabled() -> bool:
-    """Whether Keycloak auth is configured."""
-    return bool(KEYCLOAK_URL)
+    """Whether Keycloak auth is configured and enabled."""
+    return bool(KEYCLOAK_URL and KEYCLOAK_ENABLED)
 
 
 def require_auth(
