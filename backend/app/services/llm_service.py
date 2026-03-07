@@ -297,23 +297,31 @@ async def _chat(
     stream: bool = False,
     max_tokens: int | None = None,
     timeout: int | None = None,
-) -> str | None:
+    model: str | None = None,
+    temperature: float | None = None,
+) -> str | tuple[str | None, int | None] | None:
     """
     Low-level Ollama chat. Returns full text when stream=False, None on error.
+    model and temperature override get_llm_config() when provided.
     """
     cfg = get_llm_config()
     if not cfg.url:
-        return None
+        return (None, None) if not stream else None
+    effective_model = model or cfg.model
     if max_tokens is None:
         max_tokens = cfg.max_output_tokens
     effective_timeout = timeout if timeout is not None else cfg.summarize_timeout
 
+    options: dict = {"num_predict": max_tokens}
+    if temperature is not None:
+        options["temperature"] = temperature
+
     url = f"{cfg.url}/api/chat"
     payload = {
-        "model": cfg.model,
+        "model": effective_model,
         "messages": messages,
         "stream": stream,
-        "options": {"num_predict": max_tokens},
+        "options": options,
     }
     try:
         async with httpx.AsyncClient(timeout=effective_timeout) as client:
@@ -340,10 +348,12 @@ async def _chat(
                 resp.raise_for_status()
                 data = resp.json()
                 msg = data.get("message") or {}
-                return (msg.get("content") or "").strip() or None
+                text = (msg.get("content") or "").strip() or None
+                eval_count = data.get("eval_count")
+                return (text, eval_count)
     except httpx.TimeoutException:
         log.warning("LLM request timed out after %ds", effective_timeout)
-        return None
+        return (None, None)
     except httpx.HTTPStatusError as e:
         err_body = ""
         if hasattr(e, "response") and e.response is not None:
@@ -356,10 +366,10 @@ async def _chat(
             e,
             f" | Ollama response: {err_body}" if err_body else "",
         )
-        return None
+        return (None, None)
     except Exception as e:
         log.warning("LLM request failed: %s", e)
-        return None
+        return (None, None)
 
 
 async def summarize_resume_match(
@@ -367,13 +377,17 @@ async def summarize_resume_match(
     matches: list[dict],
     by_category: list[dict],
     timeout: int | None = None,
-) -> str | None:
+    model: str | None = None,
+    max_tokens: int | None = None,
+    temperature: float | None = None,
+) -> tuple[str | None, int | None]:
     """
     Call Ollama to generate a human-readable summary of the resume-job match.
-    Returns None if LLM is disabled, unavailable, or errors.
+    Returns (summary_text, eval_count). summary_text is None if LLM is disabled, unavailable, or errors.
+    model, max_tokens, temperature override env/DB config when provided.
     """
     if not extracted_skills and not by_category:
-        return None
+        return (None, None)
 
     prompt = _build_prompt(extracted_skills, matches or [], by_category)
     messages = [
@@ -381,10 +395,17 @@ async def summarize_resume_match(
         {"role": "user", "content": prompt},
     ]
 
-    text = await _chat(messages, stream=False, timeout=timeout)
+    text, eval_count = await _chat(
+        messages,
+        stream=False,
+        timeout=timeout,
+        max_tokens=max_tokens,
+        model=model,
+        temperature=temperature,
+    )
     if text:
-        return _ensure_markdown(text)
-    return None
+        return (_ensure_markdown(text), eval_count)
+    return (None, eval_count)
 
 
 async def summarize_resume_match_stream(
@@ -392,9 +413,13 @@ async def summarize_resume_match_stream(
     matches: list[dict],
     by_category: list[dict],
     timeout: int | None = None,
+    model: str | None = None,
+    max_tokens: int | None = None,
+    temperature: float | None = None,
 ):
     """
     Stream summary chunks from Ollama. Yields text chunks as they arrive.
+    model, max_tokens, temperature override env/DB config when provided.
     """
     if not extracted_skills and not by_category:
         return
@@ -409,13 +434,19 @@ async def summarize_resume_match_stream(
     if not cfg.url:
         return
 
-    url = f"{cfg.url}/api/chat"
+    effective_model = model or cfg.model
+    effective_max_tokens = max_tokens or cfg.max_output_tokens
     effective_timeout = timeout if timeout is not None else cfg.summarize_timeout
+    options: dict = {"num_predict": effective_max_tokens}
+    if temperature is not None:
+        options["temperature"] = temperature
+
+    url = f"{cfg.url}/api/chat"
     payload = {
-        "model": cfg.model,
+        "model": effective_model,
         "messages": messages,
         "stream": True,
-        "options": {"num_predict": cfg.max_output_tokens},
+        "options": options,
     }
     try:
         async with httpx.AsyncClient(timeout=effective_timeout) as client:

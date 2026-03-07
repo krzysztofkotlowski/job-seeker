@@ -1,7 +1,9 @@
 /** Module-level token provider for API client. Set by AuthProvider when Keycloak is ready. */
 let tokenProvider: (() => Promise<string | null>) | null = null;
 
-export function setTokenProvider(fn: (() => Promise<string | null>) | null): void {
+export function setTokenProvider(
+  fn: (() => Promise<string | null>) | null,
+): void {
   tokenProvider = fn;
 }
 

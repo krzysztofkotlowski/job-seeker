@@ -10,7 +10,7 @@ from slowapi.util import get_remote_address
 from app.config import get_cors_origins, get_rate_limit
 from app.database import engine, Base, wait_for_db
 from app.errors import setup_exception_handlers
-from app.routers import jobs, skills, imports, backup
+from app.routers import ai_config, jobs, skills, imports, backup
 
 log = logging.getLogger(__name__)
 
@@ -61,6 +61,7 @@ def _maybe_sync_embeddings_on_startup():
             _get_client,
         )
         from app.services.embedding_service import is_available as embed_is_available
+        from app.services.ai_config_service import get_ai_config
         from app.database import SessionLocal
         from app.models.tables import JobRow
 
@@ -76,9 +77,10 @@ def _maybe_sync_embeddings_on_startup():
             return
         db = SessionLocal()
         try:
+            ai_cfg = get_ai_config(db)
             rows = db.query(JobRow).all()
             if rows:
-                indexed = bulk_index_jobs(rows)
+                indexed = bulk_index_jobs(rows, embed_model=ai_cfg["embed_model"])
                 log.info("Startup: synced %d jobs to Elasticsearch for RAG", indexed)
         finally:
             db.close()
@@ -119,6 +121,7 @@ app.include_router(jobs.router, prefix="/api/v1/jobs", tags=["jobs"])
 app.include_router(skills.router, prefix="/api/v1/skills", tags=["skills"])
 app.include_router(imports.router, prefix="/api/v1/import", tags=["import"])
 app.include_router(backup.router, prefix="/api/v1/backup", tags=["backup"])
+app.include_router(ai_config.router, prefix="/api/v1/ai", tags=["ai"])
 if resume_router is not None:
     app.include_router(resume_router, prefix="/api/v1/resume", tags=["resume"])
 

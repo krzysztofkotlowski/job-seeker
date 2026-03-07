@@ -3,7 +3,7 @@ source = app
 omit = app/migrations/*,*/__pycache__/*
 
 [report]
-fail_under = 45
+fail_under = 48
 show_missing = True
 exclude_lines =
     pragma: no cover

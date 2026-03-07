@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useEffect, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
 import Box from "@mui/material/Box";
 import Paper from "@mui/material/Paper";
@@ -20,7 +20,6 @@ import Button from "@mui/material/Button";
 import Collapse from "@mui/material/Collapse";
 import Fade from "@mui/material/Fade";
 import Autocomplete from "@mui/material/Autocomplete";
-import CircularProgress from "@mui/material/CircularProgress";
 import Divider from "@mui/material/Divider";
 import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
@@ -31,14 +30,16 @@ import DialogContent from "@mui/material/DialogContent";
 import SearchIcon from "@mui/icons-material/Search";
 import FilterListIcon from "@mui/icons-material/FilterList";
 import AddIcon from "@mui/icons-material/Add";
-import InboxIcon from "@mui/icons-material/Inbox";
 import VisibilityOffIcon from "@mui/icons-material/VisibilityOff";
 import FileCopyOutlinedIcon from "@mui/icons-material/FileCopyOutlined";
 import BookmarkIcon from "@mui/icons-material/Bookmark";
 import BookmarkBorderIcon from "@mui/icons-material/BookmarkBorder";
+import { useQueryClient } from "@tanstack/react-query";
 import { api } from "../api/client";
-import type { Job, PaginatedResponse } from "../api/types";
+import { useJobsList, useJobsAnalytics, useJobsFilters, jobsKeys } from "../hooks/useJobs";
 import { AddJobForm } from "../components/AddJobForm";
+import { EmptyState } from "../components/EmptyState";
+import { LoadingSpinner } from "../components/LoadingSpinner";
 import { StatusBadge } from "../components/StatusBadge";
 import { useToast } from "../contexts/useToast";
 import { formatSalary, STATUS_TAB_COLORS } from "../utils/job";
@@ -77,18 +78,11 @@ const FILTER_STORAGE_KEY = "job-list-filters";
 export function JobListPage() {
   const navigate = useNavigate();
   const toast = useToast();
+  const queryClient = useQueryClient();
   const [searchParams, setSearchParams] = useSearchParams();
-  const [data, setData] = useState<PaginatedResponse<Job> | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [workTypes, setWorkTypes] = useState<string[]>([]);
-  const [locations, setLocations] = useState<string[]>([]);
-  const [categories, setCategories] = useState<string[]>([]);
-  const [seniorities, setSeniorities] = useState<string[]>([]);
-  const [topSkills, setTopSkills] = useState<string[]>([]);
   const [showFilters, setShowFilters] = useState(true);
   const [filtersRestored, setFiltersRestored] = useState(false);
   const [readyToFetch, setReadyToFetch] = useState(false);
-  const [counts, setCounts] = useState<{ by_status: Record<string, number>; saved_count: number } | null>(null);
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [addJobOpen, setAddJobOpen] = useState(false);
 
@@ -103,68 +97,123 @@ export function JobListPage() {
   const category = searchParams.get("category") || "";
   const seniority = searchParams.get("seniority") || "";
   const seniorityArr = seniority ? seniority.split(",") : [];
-  const skillsParam = searchParams.get("skills") || searchParams.get("skill") || "";
-  const skillsArr = skillsParam ? skillsParam.split(",").map((s) => s.trim()).filter(Boolean) : [];
+  const skillsParam =
+    searchParams.get("skills") || searchParams.get("skill") || "";
+  const skillsArr = skillsParam
+    ? skillsParam
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean)
+    : [];
   const savedFilter = searchParams.get("saved") || "";
   const showDuplicates = searchParams.get("group_duplicates") === "true";
 
-  // One-time load of filter dropdown options
+  const savedBool =
+    savedFilter === "true" ? true : savedFilter === "false" ? false : undefined;
+  const repostedBool =
+    reposted === "true" ? true : reposted === "false" ? false : undefined;
+
+  const filtersQuery = useJobsFilters();
+  const workTypes = filtersQuery.data?.workTypes ?? [];
+  const locations = filtersQuery.data?.locations ?? [];
+  const categories = filtersQuery.data?.categories ?? [];
+  const seniorities = filtersQuery.data?.seniorities ?? [];
+  const topSkills = filtersQuery.data?.topSkills ?? [];
+
   useEffect(() => {
-    Promise.all([
-      api.listWorkTypes().then(setWorkTypes),
-      api.listLocations().then(setLocations),
-      api.listCategories().then(setCategories),
-      api.listSeniorities().then(setSeniorities),
-      api.listTopSkills(100).then(setTopSkills),
-    ]).catch((e) => toast.showError(e instanceof Error ? e.message : "Failed to load filter options"));
-  }, [toast]);
+    if (filtersQuery.isError && filtersQuery.error) {
+      toast.showError(
+        filtersQuery.error instanceof Error
+          ? filtersQuery.error.message
+          : "Failed to load filter options",
+      );
+    }
+  }, [filtersQuery.isError, filtersQuery.error, toast]);
+
+  const jobsQuery = useJobsList({
+    page,
+    perPage: PER_PAGE,
+    status: status || undefined,
+    source: source || undefined,
+    category: category || undefined,
+    seniority: seniority || undefined,
+    skills: skillsParam || undefined,
+    search: search || undefined,
+    isReposted: repostedBool,
+    workType: workType || undefined,
+    location: location || undefined,
+    sortBy: sortBy || undefined,
+    groupDuplicates: !showDuplicates,
+    saved: savedBool,
+    enabled: readyToFetch,
+  });
+
+  const analyticsQuery = useJobsAnalytics({
+    source: source || undefined,
+    category: category || undefined,
+    seniority: seniority || undefined,
+    skills: skillsParam || undefined,
+    search: debouncedSearch || undefined,
+    isReposted: repostedBool,
+    workType: workType || undefined,
+    location: location || undefined,
+    saved: savedBool,
+    groupDuplicates: !showDuplicates,
+    enabled: readyToFetch,
+  });
+
+  const data = jobsQuery.data ?? null;
+  const loading = jobsQuery.isLoading;
+  const counts = analyticsQuery.data
+    ? {
+        by_status: analyticsQuery.data.by_status,
+        saved_count: analyticsQuery.data.saved_count ?? 0,
+      }
+    : null;
+
+  useEffect(() => {
+    if (jobsQuery.isError && jobsQuery.error) {
+      toast.showError(
+        jobsQuery.error instanceof Error
+          ? jobsQuery.error.message
+          : "Failed to load jobs",
+      );
+    }
+  }, [jobsQuery.isError, jobsQuery.error, toast]);
+
+  useEffect(() => {
+    if (analyticsQuery.isError && analyticsQuery.error) {
+      toast.showError(
+        analyticsQuery.error instanceof Error
+          ? analyticsQuery.error.message
+          : "Failed to load analytics",
+      );
+    }
+  }, [analyticsQuery.isError, analyticsQuery.error, toast]);
 
   // Debounce search for analytics to avoid a request on every keystroke
   useEffect(() => {
-    setDebouncedSearch((prev) => (prev === "" && search ? search : prev));
+    queueMicrotask(() =>
+      setDebouncedSearch((prev) => (prev === "" && search ? search : prev)),
+    );
     const t = setTimeout(() => setDebouncedSearch(search), 400);
     return () => clearTimeout(t);
   }, [search]);
-
-  // Fetch status/saved counts for current filters (updates chip numbers when filters change)
-  useEffect(() => {
-    if (!readyToFetch) return;
-    const ac = new AbortController();
-    const params = {
-      source: source || undefined,
-      category: category || undefined,
-      seniority: seniority || undefined,
-      skills: skillsParam || undefined,
-      search: debouncedSearch || undefined,
-      is_reposted: reposted === "true" ? true : reposted === "false" ? false : undefined,
-      work_type: workType || undefined,
-      location: location || undefined,
-      saved: savedFilter === "true" ? true : savedFilter === "false" ? false : undefined,
-      group_duplicates: !showDuplicates,
-    };
-    api
-      .analytics(params)
-      .then((a) => {
-        if (!ac.signal.aborted) setCounts({ by_status: a.by_status, saved_count: a.saved_count ?? 0 });
-      })
-      .catch((e) => {
-        if (!ac.signal.aborted) {
-          setCounts(null);
-          toast.showError(e instanceof Error ? e.message : "Failed to load analytics");
-        }
-      });
-    return () => ac.abort();
-  }, [readyToFetch, source, category, seniority, skillsParam, debouncedSearch, reposted, workType, location, savedFilter, showDuplicates, toast]);
 
   useEffect(() => {
     if (filtersRestored) return;
     const keys = [...searchParams.keys()].filter((k) => k !== "page");
     if (keys.length > 0) {
-      setFiltersRestored(true);
-      setReadyToFetch(true);
+      queueMicrotask(() => {
+        setFiltersRestored(true);
+        setReadyToFetch(true);
+      });
       return;
     }
-    setFiltersRestored(true);
+    queueMicrotask(() => {
+      setFiltersRestored(true);
+      setReadyToFetch(true);
+    });
     try {
       const saved = localStorage.getItem(FILTER_STORAGE_KEY);
       if (saved) {
@@ -174,7 +223,6 @@ export function JobListPage() {
     } catch {
       // ignore
     }
-    setReadyToFetch(true);
   }, [filtersRestored, searchParams, setSearchParams]);
 
   useEffect(() => {
@@ -182,37 +230,9 @@ export function JobListPage() {
     if (qs) localStorage.setItem(FILTER_STORAGE_KEY, qs);
   }, [searchParams]);
 
-  const fetchJobs = useCallback(async () => {
-    setLoading(true);
-    try {
-      const result = await api.listJobs({
-        page,
-        per_page: PER_PAGE,
-        status: status || undefined,
-        source: source || undefined,
-        search: search || undefined,
-        is_reposted: reposted === "true" ? true : reposted === "false" ? false : undefined,
-        sort_by: sortBy || undefined,
-        work_type: workType || undefined,
-        location: location || undefined,
-        category: category || undefined,
-        seniority: seniority || undefined,
-        skills: skillsParam || undefined,
-        saved: savedFilter === "true" ? true : savedFilter === "false" ? false : undefined,
-        group_duplicates: !showDuplicates,
-      });
-      setData(result);
-    } catch (e) {
-      toast.showError(e instanceof Error ? e.message : "Failed to load jobs");
-    } finally {
-      setLoading(false);
-    }
-  }, [page, status, source, search, reposted, sortBy, workType, location, category, seniority, skillsParam, savedFilter, showDuplicates, toast]);
-
-  useEffect(() => {
-    if (!readyToFetch) return;
-    fetchJobs();
-  }, [readyToFetch, fetchJobs]);
+  const refetchJobs = () => {
+    queryClient.invalidateQueries({ queryKey: jobsKeys.all });
+  };
 
   const setFilter = (key: string, value: string) => {
     const next = new URLSearchParams(searchParams);
@@ -227,8 +247,10 @@ export function JobListPage() {
 
   const setStatusAndSaved = (newStatus: string, newSaved: string) => {
     const next = new URLSearchParams(searchParams);
-    if (newStatus) next.set("status", newStatus); else next.delete("status");
-    if (newSaved) next.set("saved", newSaved); else next.delete("saved");
+    if (newStatus) next.set("status", newStatus);
+    else next.delete("status");
+    if (newSaved) next.set("saved", newSaved);
+    else next.delete("saved");
     next.set("page", "1");
     setSearchParams(next);
   };
@@ -239,18 +261,32 @@ export function JobListPage() {
 
   const activeFilters: { key: string; label: string }[] = [];
   if (source) activeFilters.push({ key: "source", label: `Source: ${source}` });
-  if (category) activeFilters.push({ key: "category", label: `Category: ${category}` });
+  if (category)
+    activeFilters.push({ key: "category", label: `Category: ${category}` });
   if (seniority) {
     seniorityArr.forEach((s) =>
-      activeFilters.push({ key: `seniority:${s}`, label: `Seniority: ${s}` })
+      activeFilters.push({ key: `seniority:${s}`, label: `Seniority: ${s}` }),
     );
   }
-  if (workType) activeFilters.push({ key: "work_type", label: `Work: ${workType}` });
-  if (location) activeFilters.push({ key: "location", label: `Location: ${location}` });
-  skillsArr.forEach((s) => activeFilters.push({ key: `skill:${s}`, label: `Skill: ${s}` }));
-  if (reposted) activeFilters.push({ key: "is_reposted", label: reposted === "true" ? "Reposted" : "Original" });
-  if (showDuplicates) activeFilters.push({ key: "group_duplicates", label: "Show duplicates" });
-  if (sortBy) activeFilters.push({ key: "sort_by", label: `Sort: ${SORT_OPTIONS.find((o) => o.value === sortBy)?.label ?? sortBy}` });
+  if (workType)
+    activeFilters.push({ key: "work_type", label: `Work: ${workType}` });
+  if (location)
+    activeFilters.push({ key: "location", label: `Location: ${location}` });
+  skillsArr.forEach((s) =>
+    activeFilters.push({ key: `skill:${s}`, label: `Skill: ${s}` }),
+  );
+  if (reposted)
+    activeFilters.push({
+      key: "is_reposted",
+      label: reposted === "true" ? "Reposted" : "Original",
+    });
+  if (showDuplicates)
+    activeFilters.push({ key: "group_duplicates", label: "Show duplicates" });
+  if (sortBy)
+    activeFilters.push({
+      key: "sort_by",
+      label: `Sort: ${SORT_OPTIONS.find((o) => o.value === sortBy)?.label ?? sortBy}`,
+    });
 
   const jobs = data?.items ?? [];
 
@@ -268,13 +304,19 @@ export function JobListPage() {
     setFilter("search", trimmed);
   };
 
-  const handleToggleSaved = async (e: React.MouseEvent, jobId: string, current: boolean) => {
+  const handleToggleSaved = async (
+    e: React.MouseEvent,
+    jobId: string,
+    current: boolean,
+  ) => {
     e.stopPropagation();
     try {
       await api.updateJob(jobId, { saved: !current });
-      fetchJobs();
+      refetchJobs();
     } catch (err) {
-      toast.showError(err instanceof Error ? err.message : "Failed to update saved status");
+      toast.showError(
+        err instanceof Error ? err.message : "Failed to update saved status",
+      );
     }
   };
 
@@ -282,20 +324,29 @@ export function JobListPage() {
     e.stopPropagation();
     try {
       await api.updateJob(jobId, { status: "seen" });
-      fetchJobs();
+      refetchJobs();
     } catch (err) {
-      toast.showError(err instanceof Error ? err.message : "Failed to mark as seen");
+      toast.showError(
+        err instanceof Error ? err.message : "Failed to mark as seen",
+      );
     }
   };
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
       {/* Header */}
-      <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+      <Box
+        sx={{
+          display: "flex",
+          alignItems: "center",
+          justifyContent: "space-between",
+        }}
+      >
         <Typography variant="body2" color="text.secondary">
           {data ? (
             <>
-              <strong>{data.total.toLocaleString()}</strong> job{data.total !== 1 ? "s" : ""} found
+              <strong>{data.total.toLocaleString()}</strong> job
+              {data.total !== 1 ? "s" : ""} found
             </>
           ) : (
             "Loading..."
@@ -323,25 +374,43 @@ export function JobListPage() {
           >
             Filters
             {activeFilters.length > 0 && (
-              <Chip label={activeFilters.length} size="small" color="primary" sx={{ ml: 1, height: 20, fontSize: 11 }} />
+              <Chip
+                label={activeFilters.length}
+                size="small"
+                color="primary"
+                sx={{ ml: 1, height: 20, fontSize: 11 }}
+              />
             )}
           </Button>
         </Box>
       </Box>
 
-      <Dialog open={addJobOpen} onClose={() => setAddJobOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog
+        open={addJobOpen}
+        onClose={() => setAddJobOpen(false)}
+        maxWidth="sm"
+        fullWidth
+      >
         <DialogTitle>Add Job Offer</DialogTitle>
         <DialogContent>
           <AddJobForm
             onJobAdded={() => {
               setAddJobOpen(false);
-              fetchJobs();
+              refetchJobs();
             }}
           />
         </DialogContent>
       </Dialog>
 
-      <Paper elevation={0} sx={{ border: 1, borderColor: "divider", borderRadius: 2, overflow: "hidden" }}>
+      <Paper
+        elevation={0}
+        sx={{
+          border: 1,
+          borderColor: "divider",
+          borderRadius: 2,
+          overflow: "hidden",
+        }}
+      >
         {/* Search */}
         <Box sx={{ p: 2, borderBottom: 1, borderColor: "divider" }}>
           <TextField
@@ -349,7 +418,8 @@ export function JobListPage() {
             size="small"
             defaultValue={search}
             onKeyDown={(e) => {
-              if (e.key === "Enter") handleSearch((e.target as HTMLInputElement).value);
+              if (e.key === "Enter")
+                handleSearch((e.target as HTMLInputElement).value);
             }}
             onBlur={(e) => handleSearch(e.target.value)}
             placeholder="Search by title, company, or paste offer URL..."
@@ -378,20 +448,27 @@ export function JobListPage() {
             alignItems: "stretch",
           }}
         >
-          <Tooltip title="Total postings (includes duplicates). List groups duplicates by default; enable below to see each posting." arrow>
+          <Tooltip
+            title="Total postings (includes duplicates). List groups duplicates by default; enable below to see each posting."
+            arrow
+          >
             <Chip
-              label={counts ? `All (${counts.by_status ? Object.values(counts.by_status).reduce((a, b) => a + b, 0) : 0})` : "All"}
+              label={
+                counts
+                  ? `All (${counts.by_status ? Object.values(counts.by_status).reduce((a, b) => a + b, 0) : 0})`
+                  : "All"
+              }
               onClick={() => setStatusAndSaved("", "")}
               variant={!status && !savedFilter ? "filled" : "outlined"}
               color="primary"
               sx={{
-              flex: 1,
-              minWidth: 0,
-              fontWeight: 600,
-              height: 40,
-              fontSize: "0.875rem",
-              "& .MuiChip-label": { px: 1 },
-            }}
+                flex: 1,
+                minWidth: 0,
+                fontWeight: 600,
+                height: 40,
+                fontSize: "0.875rem",
+                "& .MuiChip-label": { px: 1 },
+              }}
             />
           </Tooltip>
           {STATUS_TABS.filter((t) => t.value !== "").map((tab) => {
@@ -411,10 +488,18 @@ export function JobListPage() {
                   fontSize: "0.875rem",
                   "& .MuiChip-label": { px: 1 },
                   ...(selected && tab.value && STATUS_TAB_COLORS[tab.value]
-                    ? { bgcolor: STATUS_TAB_COLORS[tab.value], color: "white", borderColor: STATUS_TAB_COLORS[tab.value], "&:hover": { bgcolor: STATUS_TAB_COLORS[tab.value] } }
+                    ? {
+                        bgcolor: STATUS_TAB_COLORS[tab.value],
+                        color: "white",
+                        borderColor: STATUS_TAB_COLORS[tab.value],
+                        "&:hover": { bgcolor: STATUS_TAB_COLORS[tab.value] },
+                      }
                     : {}),
                   ...(!selected && tab.value && STATUS_TAB_COLORS[tab.value]
-                    ? { borderColor: STATUS_TAB_COLORS[tab.value], color: STATUS_TAB_COLORS[tab.value] }
+                    ? {
+                        borderColor: STATUS_TAB_COLORS[tab.value],
+                        color: STATUS_TAB_COLORS[tab.value],
+                      }
                     : {}),
                 }}
               />
@@ -438,10 +523,41 @@ export function JobListPage() {
 
         {/* Filters */}
         <Collapse in={showFilters}>
-          <Box sx={{ px: 2, py: 1.5, borderBottom: 1, borderColor: "divider", bgcolor: "action.hover" }}>
-            <Box sx={{ display: "grid", gridTemplateColumns: { xs: "1fr 1fr", md: "1fr 1fr 1fr 1fr", lg: "repeat(4, 1fr)" }, gap: 1.5 }}>
-              <FilterSelect label="Source" value={source} onChange={(v) => setFilter("source", v)} options={SOURCE_OPTIONS} />
-              <FilterSelect label="Category" value={category} onChange={(v) => setFilter("category", v)} options={[{ value: "", label: "All Categories" }, ...categories.map((c) => ({ value: c, label: c }))]} />
+          <Box
+            sx={{
+              px: 2,
+              py: 1.5,
+              borderBottom: 1,
+              borderColor: "divider",
+              bgcolor: "action.hover",
+            }}
+          >
+            <Box
+              sx={{
+                display: "grid",
+                gridTemplateColumns: {
+                  xs: "1fr 1fr",
+                  md: "1fr 1fr 1fr 1fr",
+                  lg: "repeat(4, 1fr)",
+                },
+                gap: 1.5,
+              }}
+            >
+              <FilterSelect
+                label="Source"
+                value={source}
+                onChange={(v) => setFilter("source", v)}
+                options={SOURCE_OPTIONS}
+              />
+              <FilterSelect
+                label="Category"
+                value={category}
+                onChange={(v) => setFilter("category", v)}
+                options={[
+                  { value: "", label: "All Categories" },
+                  ...categories.map((c) => ({ value: c, label: c })),
+                ]}
+              />
               <FormControl size="small" fullWidth>
                 <InputLabel>Seniority</InputLabel>
                 <Select<string[]>
@@ -449,24 +565,63 @@ export function JobListPage() {
                   value={seniorityArr}
                   onChange={(e) => {
                     const val = e.target.value;
-                    setFilter("seniority", (typeof val === "string" ? val.split(",") : val).join(","));
+                    setFilter(
+                      "seniority",
+                      (typeof val === "string" ? val.split(",") : val).join(
+                        ",",
+                      ),
+                    );
                   }}
                   input={<OutlinedInput label="Seniority" />}
                   renderValue={(sel) => (sel as string[]).join(", ")}
                 >
                   {seniorities.map((s) => (
                     <MenuItem key={s} value={s}>
-                      <Checkbox size="small" checked={seniorityArr.includes(s)} />
+                      <Checkbox
+                        size="small"
+                        checked={seniorityArr.includes(s)}
+                      />
                       <ListItemText primary={s} />
                     </MenuItem>
                   ))}
                 </Select>
               </FormControl>
-              <FilterSelect label="Work Type" value={workType} onChange={(v) => setFilter("work_type", v)} options={[{ value: "", label: "All Work Types" }, ...workTypes.map((wt) => ({ value: wt, label: wt }))]} />
+              <FilterSelect
+                label="Work Type"
+                value={workType}
+                onChange={(v) => setFilter("work_type", v)}
+                options={[
+                  { value: "", label: "All Work Types" },
+                  ...workTypes.map((wt) => ({ value: wt, label: wt })),
+                ]}
+              />
             </Box>
-            <Box sx={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 1.5, mt: 1.5 }}>
-              <FilterSelect label="Location" value={location} onChange={(v) => setFilter("location", v)} options={[{ value: "", label: "All Locations" }, ...locations.map((loc) => ({ value: loc, label: loc }))]} sx={{ minWidth: 140 }} />
-              <FilterSelect label="Reposted" value={reposted} onChange={(v) => setFilter("is_reposted", v)} options={REPOSTED_OPTIONS} sx={{ minWidth: 130 }} />
+            <Box
+              sx={{
+                display: "flex",
+                flexWrap: "wrap",
+                alignItems: "center",
+                gap: 1.5,
+                mt: 1.5,
+              }}
+            >
+              <FilterSelect
+                label="Location"
+                value={location}
+                onChange={(v) => setFilter("location", v)}
+                options={[
+                  { value: "", label: "All Locations" },
+                  ...locations.map((loc) => ({ value: loc, label: loc })),
+                ]}
+                sx={{ minWidth: 140 }}
+              />
+              <FilterSelect
+                label="Reposted"
+                value={reposted}
+                onChange={(v) => setFilter("is_reposted", v)}
+                options={REPOSTED_OPTIONS}
+                sx={{ minWidth: 130 }}
+              />
               <Box sx={{ flex: 1, minWidth: 200 }}>
                 <Autocomplete
                   size="small"
@@ -474,8 +629,16 @@ export function JobListPage() {
                   freeSolo
                   options={topSkills}
                   value={skillsArr}
-                  onChange={(_e, val) => setFilter("skills", (val as string[]).join(","))}
-                  renderInput={(params) => <TextField {...params} label="Skills (all must match)" placeholder="Add skills…" />}
+                  onChange={(_e, val) =>
+                    setFilter("skills", (val as string[]).join(","))
+                  }
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      label="Skills (all must match)"
+                      placeholder="Add skills…"
+                    />
+                  )}
                   renderTags={(value, getTagProps) =>
                     value.map((option, index) => (
                       <Chip
@@ -494,14 +657,25 @@ export function JobListPage() {
                   <Checkbox
                     size="small"
                     checked={showDuplicates}
-                    onChange={(_e, checked) => setFilter("group_duplicates", checked ? "true" : "")}
+                    onChange={(_e, checked) =>
+                      setFilter("group_duplicates", checked ? "true" : "")
+                    }
                   />
                 }
-                label={<Typography variant="caption" color="text.secondary">Show duplicates (list shows one per job by default)</Typography>}
+                label={
+                  <Typography variant="caption" color="text.secondary">
+                    Show duplicates (list shows one per job by default)
+                  </Typography>
+                }
                 sx={{ mt: 0.5 }}
               />
               <Box sx={{ ml: "auto", minWidth: 180 }}>
-                <FilterSelect label="Sort By" value={sortBy} onChange={(v) => setFilter("sort_by", v)} options={SORT_OPTIONS} />
+                <FilterSelect
+                  label="Sort By"
+                  value={sortBy}
+                  onChange={(v) => setFilter("sort_by", v)}
+                  options={SORT_OPTIONS}
+                />
               </Box>
             </Box>
 
@@ -519,11 +693,15 @@ export function JobListPage() {
                       onDelete={() => {
                         if (f.key.startsWith("seniority:")) {
                           const toRemove = f.key.split(":")[1];
-                          const remaining = seniorityArr.filter((s) => s !== toRemove);
+                          const remaining = seniorityArr.filter(
+                            (s) => s !== toRemove,
+                          );
                           setFilter("seniority", remaining.join(","));
                         } else if (f.key.startsWith("skill:")) {
                           const toRemove = f.key.slice(6);
-                          const remaining = skillsArr.filter((s) => s !== toRemove);
+                          const remaining = skillsArr.filter(
+                            (s) => s !== toRemove,
+                          );
                           setFilter("skills", remaining.join(","));
                         } else if (f.key === "group_duplicates") {
                           setFilter("group_duplicates", "");
@@ -542,140 +720,249 @@ export function JobListPage() {
         {/* Content */}
         {loading ? (
           <Fade in>
-            <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", py: 8, transition: "opacity 0.2s ease" }}>
-              <CircularProgress size={32} />
-              <Typography variant="body2" color="text.secondary" sx={{ mt: 2 }}>
-                Loading jobs...
-              </Typography>
-            </Box>
+            <LoadingSpinner size={32} message="Loading jobs..." />
           </Fade>
         ) : jobs.length === 0 ? (
           <Fade in>
-            <Box sx={{ display: "flex", flexDirection: "column", alignItems: "center", py: 8, color: "text.secondary" }}>
-              <InboxIcon sx={{ fontSize: 48, mb: 1, color: "grey.400" }} />
-              <Typography variant="h6" color="text.secondary">No jobs found</Typography>
-              <Typography variant="body2">Try changing filters or importing jobs first</Typography>
+            <Box sx={{ py: 8 }}>
+              <EmptyState
+                message="No jobs found"
+                description="Try changing filters or importing jobs first"
+              />
             </Box>
           </Fade>
         ) : (
           <Fade in>
-          <Box sx={{ transition: "opacity 0.2s ease" }}>
-            {jobs.map((job, idx) => {
-              const sal = formatSalary(job);
-              return (
-                <Box key={job.id}>
-                  {idx > 0 && <Divider />}
-                  <Box
-                    onClick={() => navigate(`/jobs/${job.id}`)}
-                    sx={{
-                      p: 2,
-                      cursor: "pointer",
-                      "&:hover": { bgcolor: "action.hover" },
-                      transition: "background 0.15s, opacity 0.15s",
-                      ...(job.status === "seen" && { opacity: 0.55, bgcolor: "action.hover" }),
-                    }}
-                  >
-                    <Box sx={{ display: "flex", justifyContent: "space-between", gap: 2 }}>
-                      <Box sx={{ minWidth: 0, flex: 1 }}>
-                        <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 0.5 }}>
-                          <Typography
-                            variant="h6"
+            <Box sx={{ transition: "opacity 0.2s ease" }}>
+              {jobs.map((job, idx) => {
+                const sal = formatSalary(job);
+                return (
+                  <Box key={job.id}>
+                    {idx > 0 && <Divider />}
+                    <Box
+                      onClick={() => navigate(`/jobs/${job.id}`)}
+                      sx={{
+                        p: 2,
+                        cursor: "pointer",
+                        "&:hover": { bgcolor: "action.hover" },
+                        transition: "background 0.15s, opacity 0.15s",
+                        ...(job.status === "seen" && {
+                          opacity: 0.55,
+                          bgcolor: "action.hover",
+                        }),
+                      }}
+                    >
+                      <Box
+                        sx={{
+                          display: "flex",
+                          justifyContent: "space-between",
+                          gap: 2,
+                        }}
+                      >
+                        <Box sx={{ minWidth: 0, flex: 1 }}>
+                          <Box
                             sx={{
-                              fontWeight: 700,
-                              fontSize: "1.1rem",
-                              overflow: "hidden",
-                              textOverflow: "ellipsis",
-                              whiteSpace: "nowrap",
+                              display: "flex",
+                              alignItems: "center",
+                              gap: 1,
+                              mb: 0.5,
                             }}
                           >
-                            {job.title}
-                          </Typography>
-                          <StatusBadge status={job.status} />
-                          {job.saved && (
-                            <Chip label="Saved" size="small" color="primary" variant="filled" sx={{ height: 20, fontSize: 11 }} />
-                          )}
-                          {job.is_reposted && (
-                            <Chip label="Reposted" size="small" color="warning" variant="outlined" sx={{ height: 20, fontSize: 11 }} />
-                          )}
-                          {(job.duplicate_count ?? 1) > 1 && (
-                            <Tooltip title={`${job.duplicate_count} duplicate postings of this position`}>
-                              <Badge
-                                badgeContent={job.duplicate_count}
-                                color="secondary"
-                                max={99}
-                                sx={{ "& .MuiBadge-badge": { fontSize: 10, height: 18, minWidth: 18 } }}
+                            <Typography
+                              variant="h6"
+                              sx={{
+                                fontWeight: 700,
+                                fontSize: "1.1rem",
+                                overflow: "hidden",
+                                textOverflow: "ellipsis",
+                                whiteSpace: "nowrap",
+                              }}
+                            >
+                              {job.title}
+                            </Typography>
+                            <StatusBadge status={job.status} />
+                            {job.saved && (
+                              <Chip
+                                label="Saved"
+                                size="small"
+                                color="primary"
+                                variant="filled"
+                                sx={{ height: 20, fontSize: 11 }}
+                              />
+                            )}
+                            {job.is_reposted && (
+                              <Chip
+                                label="Reposted"
+                                size="small"
+                                color="warning"
+                                variant="outlined"
+                                sx={{ height: 20, fontSize: 11 }}
+                              />
+                            )}
+                            {(job.duplicate_count ?? 1) > 1 && (
+                              <Tooltip
+                                title={`${job.duplicate_count} duplicate postings of this position`}
                               >
-                                <FileCopyOutlinedIcon sx={{ fontSize: 20, color: "text.secondary" }} />
-                              </Badge>
-                            </Tooltip>
-                          )}
-                        </Box>
-                        <Typography variant="subtitle1" fontWeight={600} color="text.primary">
-                          {job.company}
-                        </Typography>
-                        <Typography variant="body2" color="text.secondary">
-                          {job.location.join(", ") || "No location"}
-                          {job.work_type ? ` · ${job.work_type}` : ""}
-                          {job.category ? ` · ${job.category}` : ""}
-                          {job.seniority ? ` · ${job.seniority}` : ""}
-                        </Typography>
-                        <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mt: 1 }}>
-                          {job.skills_required.slice(0, 6).map((s) => (
-                            <Chip key={s} label={s} size="small" variant="outlined" color="primary" sx={{ height: 22, fontSize: 11 }} />
-                          ))}
-                          {job.skills_required.length > 6 && (
-                            <Typography variant="caption" color="text.secondary">
-                              +{job.skills_required.length - 6} more
-                            </Typography>
-                          )}
-                        </Box>
-                        {(job.detected_skills?.length ?? 0) > 0 && (
-                          <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mt: 0.5 }}>
-                            <Typography variant="caption" color="text.secondary" sx={{ lineHeight: "22px", mr: 0.25 }}>
-                              Detected:
-                            </Typography>
-                            {job.detected_skills!.slice(0, 5).map((s) => (
-                              <Chip key={s} label={s} size="small" variant="outlined" color="success" sx={{ height: 22, fontSize: 11 }} />
+                                <Badge
+                                  badgeContent={job.duplicate_count}
+                                  color="secondary"
+                                  max={99}
+                                  sx={{
+                                    "& .MuiBadge-badge": {
+                                      fontSize: 10,
+                                      height: 18,
+                                      minWidth: 18,
+                                    },
+                                  }}
+                                >
+                                  <FileCopyOutlinedIcon
+                                    sx={{
+                                      fontSize: 20,
+                                      color: "text.secondary",
+                                    }}
+                                  />
+                                </Badge>
+                              </Tooltip>
+                            )}
+                          </Box>
+                          <Typography
+                            variant="subtitle1"
+                            fontWeight={600}
+                            color="text.primary"
+                          >
+                            {job.company}
+                          </Typography>
+                          <Typography variant="body2" color="text.secondary">
+                            {job.location.join(", ") || "No location"}
+                            {job.work_type ? ` · ${job.work_type}` : ""}
+                            {job.category ? ` · ${job.category}` : ""}
+                            {job.seniority ? ` · ${job.seniority}` : ""}
+                          </Typography>
+                          <Box
+                            sx={{
+                              display: "flex",
+                              flexWrap: "wrap",
+                              gap: 0.5,
+                              mt: 1,
+                            }}
+                          >
+                            {job.skills_required.slice(0, 6).map((s) => (
+                              <Chip
+                                key={s}
+                                label={s}
+                                size="small"
+                                variant="outlined"
+                                color="primary"
+                                sx={{ height: 22, fontSize: 11 }}
+                              />
                             ))}
-                            {job.detected_skills!.length > 5 && (
-                              <Typography variant="caption" color="text.secondary">
-                                +{job.detected_skills!.length - 5} more
+                            {job.skills_required.length > 6 && (
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                              >
+                                +{job.skills_required.length - 6} more
                               </Typography>
                             )}
                           </Box>
-                        )}
-                      </Box>
-                      <Box sx={{ flexShrink: 0, display: "flex", alignItems: "center", gap: 1.5 }}>
-                        <Box sx={{ textAlign: "right" }}>
-                          <Typography variant="body2" fontWeight={700} color="success.dark">{sal.plnLine}</Typography>
-                          {sal.hourlyLine && (
-                            <Typography variant="caption" color="text.secondary">{sal.hourlyLine}</Typography>
+                          {(job.detected_skills?.length ?? 0) > 0 && (
+                            <Box
+                              sx={{
+                                display: "flex",
+                                flexWrap: "wrap",
+                                gap: 0.5,
+                                mt: 0.5,
+                              }}
+                            >
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                                sx={{ lineHeight: "22px", mr: 0.25 }}
+                              >
+                                Detected:
+                              </Typography>
+                              {job.detected_skills!.slice(0, 5).map((s) => (
+                                <Chip
+                                  key={s}
+                                  label={s}
+                                  size="small"
+                                  variant="outlined"
+                                  color="success"
+                                  sx={{ height: 22, fontSize: 11 }}
+                                />
+                              ))}
+                              {job.detected_skills!.length > 5 && (
+                                <Typography
+                                  variant="caption"
+                                  color="text.secondary"
+                                >
+                                  +{job.detected_skills!.length - 5} more
+                                </Typography>
+                              )}
+                            </Box>
                           )}
-                          {sal.originalLine && (
-                            <Typography variant="caption" display="block" color="text.disabled" sx={{ mt: 0.25 }}>{sal.originalLine}</Typography>
-                          )}
-                          <Typography variant="caption" display="block" color="text.disabled" sx={{ mt: 0.5 }}>{job.source}</Typography>
-                          <Typography variant="caption" display="block" color="text.disabled">{job.date_added}</Typography>
                         </Box>
-                        <Tooltip title={job.saved ? "Remove from saved" : "Save for later"} arrow>
-                          <IconButton
-                            onClick={(e) => handleToggleSaved(e, job.id, !!job.saved)}
-                            color={job.saved ? "primary" : "default"}
-                            sx={{
-                              border: 1,
-                              borderColor: "divider",
-                              width: 40,
-                              height: 40,
-                            }}
+                        <Box
+                          sx={{
+                            flexShrink: 0,
+                            display: "flex",
+                            alignItems: "center",
+                            gap: 1.5,
+                          }}
+                        >
+                          <Box sx={{ textAlign: "right" }}>
+                            <Typography
+                              variant="body2"
+                              fontWeight={700}
+                              color="success.dark"
+                            >
+                              {sal.plnLine}
+                            </Typography>
+                            {sal.hourlyLine && (
+                              <Typography
+                                variant="caption"
+                                color="text.secondary"
+                              >
+                                {sal.hourlyLine}
+                              </Typography>
+                            )}
+                            {sal.originalLine && (
+                              <Typography
+                                variant="caption"
+                                display="block"
+                                color="text.disabled"
+                                sx={{ mt: 0.25 }}
+                              >
+                                {sal.originalLine}
+                              </Typography>
+                            )}
+                            <Typography
+                              variant="caption"
+                              display="block"
+                              color="text.disabled"
+                              sx={{ mt: 0.5 }}
+                            >
+                              {job.source}
+                            </Typography>
+                            <Typography
+                              variant="caption"
+                              display="block"
+                              color="text.disabled"
+                            >
+                              {job.date_added}
+                            </Typography>
+                          </Box>
+                          <Tooltip
+                            title={
+                              job.saved ? "Remove from saved" : "Save for later"
+                            }
+                            arrow
                           >
-                            {job.saved ? <BookmarkIcon /> : <BookmarkBorderIcon />}
-                          </IconButton>
-                        </Tooltip>
-                        {job.status === "new" && (
-                          <Tooltip title="Mark as Seen" arrow>
                             <IconButton
-                              onClick={(e) => handleMarkSeen(e, job.id)}
-                              color="default"
+                              onClick={(e) =>
+                                handleToggleSaved(e, job.id, !!job.saved)
+                              }
+                              color={job.saved ? "primary" : "default"}
                               sx={{
                                 border: 1,
                                 borderColor: "divider",
@@ -683,23 +970,51 @@ export function JobListPage() {
                                 height: 40,
                               }}
                             >
-                              <VisibilityOffIcon />
+                              {job.saved ? (
+                                <BookmarkIcon />
+                              ) : (
+                                <BookmarkBorderIcon />
+                              )}
                             </IconButton>
                           </Tooltip>
-                        )}
+                          {job.status === "new" && (
+                            <Tooltip title="Mark as Seen" arrow>
+                              <IconButton
+                                onClick={(e) => handleMarkSeen(e, job.id)}
+                                color="default"
+                                sx={{
+                                  border: 1,
+                                  borderColor: "divider",
+                                  width: 40,
+                                  height: 40,
+                                }}
+                              >
+                                <VisibilityOffIcon />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                        </Box>
                       </Box>
                     </Box>
                   </Box>
-                </Box>
-              );
-            })}
-          </Box>
+                );
+              })}
+            </Box>
           </Fade>
         )}
 
         {/* Pagination */}
         {data && data.pages > 1 && (
-          <Box sx={{ display: "flex", alignItems: "center", justifyContent: "space-between", p: 2, borderTop: 1, borderColor: "divider" }}>
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "center",
+              justifyContent: "space-between",
+              p: 2,
+              borderTop: 1,
+              borderColor: "divider",
+            }}
+          >
             <Typography variant="body2" color="text.secondary">
               Page <strong>{data.page}</strong> of <strong>{data.pages}</strong>
             </Typography>
@@ -745,7 +1060,9 @@ function FilterSelect({
         onChange={(e: SelectChangeEvent) => onChange(e.target.value)}
       >
         {options.map((o) => (
-          <MenuItem key={o.value} value={o.value}>{o.label}</MenuItem>
+          <MenuItem key={o.value} value={o.value}>
+            {o.label}
+          </MenuItem>
         ))}
       </Select>
     </FormControl>

@@ -10,7 +10,42 @@ if "elasticsearch" not in sys.modules:
     sys.modules["elasticsearch"] = MagicMock()
     sys.modules["elasticsearch"].Elasticsearch = MagicMock()
 
-from app.services.resume_service import merge_keyword_and_semantic_matches, retrieve_semantic_matches
+from app.services.resume_service import (
+    match_jobs_to_skills,
+    merge_keyword_and_semantic_matches,
+    retrieve_semantic_matches,
+)
+
+
+def test_match_jobs_to_skills_returns_matches_with_limit(db):
+    """match_jobs_to_skills filters by skills and respects limit."""
+    from app.models.tables import JobRow
+    from uuid import uuid4
+
+    for i in range(5):
+        job = JobRow(
+            id=uuid4(),
+            url=f"https://example.com/job/{uuid4()}",
+            source="test",
+            title="Engineer",
+            company=f"Company{i}",
+            skills_required=["Python", "Django"] if i < 3 else ["Java"],
+            skills_nice_to_have=[],
+            date_added="2024-01-01",
+        )
+        db.add(job)
+    db.commit()
+
+    result = match_jobs_to_skills(db, {"Python", "Django"}, limit=2)
+    assert len(result) == 2
+    assert all("job" in m and "matched_skills" in m for m in result)
+    assert result[0]["match_count"] >= result[1]["match_count"]
+
+
+def test_match_jobs_to_skills_empty_skills_returns_empty(db):
+    """match_jobs_to_skills returns [] when resume_skills is empty."""
+    assert match_jobs_to_skills(db, set()) == []
+    assert match_jobs_to_skills(db, {""}) == []
 
 
 def test_merge_keyword_and_semantic_matches_dedup():

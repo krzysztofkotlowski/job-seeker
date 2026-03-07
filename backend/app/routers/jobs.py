@@ -5,15 +5,15 @@ from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException, Query, Depends
-from sqlalchemy import func, or_, cast, Numeric, and_, tuple_, select
+from sqlalchemy import func
 from sqlalchemy.orm import Session
 
 from app.database import get_db
 from app.errors import api_error
-from app.models.tables import JobRow, DetectedSkillRow
+from app.services.ai_config_service import get_ai_config
+from app.services import jobs_service
+from app.models.tables import JobRow
 from app.parsers.base import format_category
-
-SENIORITY_BLACKLIST = {"C-level"}
 from app.models.job import (
     DuplicateCheck,
     Job,
@@ -26,40 +26,6 @@ from app.parsers.detector import detect_and_parse, is_supported_url
 from app.services.currency import normalize_salary
 
 router = APIRouter()
-
-
-def _attach_detected_skills(items: list[dict], db: Session) -> None:
-    """Batch-load detected skills for a page of jobs.
-
-    For grouped results the representative row might not have detected skills
-    but a sibling row (same company + title) might, so we look up skills from
-    ALL rows sharing the same (company, lower(title)) group.
-    """
-    if not items:
-        return
-
-    from sqlalchemy import tuple_
-
-    groups = list({(i["company"], i["title"].lower()) for i in items})
-
-    title_l = func.lower(JobRow.title)
-    rows = (
-        db.query(JobRow.company, title_l, DetectedSkillRow.skill_name)
-        .join(DetectedSkillRow, DetectedSkillRow.job_id == JobRow.id)
-        .filter(
-            DetectedSkillRow.skill_name != "",
-            tuple_(JobRow.company, title_l).in_(groups),
-        )
-        .all()
-    )
-
-    by_group: dict[tuple[str, str], set[str]] = {}
-    for company, tl, skill in rows:
-        by_group.setdefault((company, tl), set()).add(skill)
-
-    for item in items:
-        key = (item["company"], item["title"].lower())
-        item["detected_skills"] = sorted(by_group.get(key, set()))
 
 
 @router.post("/parse")
@@ -118,212 +84,50 @@ def list_jobs(
     saved: Optional[bool] = Query(None),
     db: Session = Depends(get_db),
 ):
-    q = db.query(JobRow)
-
-    if status:
-        q = q.filter(JobRow.status == status)
-    if saved is not None:
-        q = q.filter(JobRow.saved == saved)
-    if source:
-        q = q.filter(JobRow.source.ilike(f"%{source}%"))
-    if category:
-        q = q.filter(JobRow.category == category)
-    if seniority:
-        parts = [s.strip() for s in seniority.split(",") if s.strip()]
-        if len(parts) == 1:
-            q = q.filter(JobRow.seniority.ilike(f"%{parts[0]}%"))
-        else:
-            q = q.filter(JobRow.seniority.in_(parts))
-    if work_type:
-        q = q.filter(JobRow.work_type.ilike(f"%{work_type}%"))
-    if location:
-        q = q.filter(JobRow.location.any(location))
-    skill_list = [s.strip() for s in (skills or skill or "").split(",") if s.strip()]
-    for s in skill_list:
-        q = q.filter(
-            or_(
-                JobRow.skills_required.any(s),
-                JobRow.skills_nice_to_have.any(s),
-            )
-        )
-    if search:
-        pattern = f"%{search}%"
-        q = q.filter(
-            or_(
-                JobRow.title.ilike(pattern),
-                JobRow.company.ilike(pattern),
-                JobRow.description.ilike(pattern),
-            )
-        )
-    if is_reposted is not None:
-        q = q.filter(JobRow.is_reposted == is_reposted)
-
-    if sort_by == "salary_desc":
-        order = [JobRow.salary_max_pln.desc().nullslast(), JobRow.created_at.desc()]
-    elif sort_by == "salary_asc":
-        order = [JobRow.salary_min_pln.asc().nullslast(), JobRow.created_at.desc()]
-    else:
-        order = [JobRow.date_added.desc(), JobRow.created_at.desc()]
-
-    title_l = func.lower(JobRow.title)
-
-    # Pre-compute duplicate counts for all (company, title) groups
-    dup_count_sq = (
-        db.query(
-            JobRow.company.label("dc_company"),
-            func.lower(JobRow.title).label("dc_title"),
-            func.count().label("dup_count"),
-        )
-        .group_by(JobRow.company, func.lower(JobRow.title))
-        .subquery()
+    params = jobs_service.ListJobsParams(
+        page=page,
+        per_page=per_page,
+        status=status,
+        source=source,
+        category=category,
+        seniority=seniority,
+        skill=skill,
+        skills=skills,
+        search=search,
+        is_reposted=is_reposted,
+        work_type=work_type,
+        location=location,
+        sort_by=sort_by,
+        group_duplicates=group_duplicates,
+        saved=saved,
     )
-
-    if group_duplicates:
-        # DISTINCT ON (company, lower(title)) to get one representative per group
-        rep_ids_sq = (
-            q.with_entities(JobRow.id)
-            .distinct(JobRow.company, title_l)
-            .order_by(JobRow.company, title_l, JobRow.created_at.desc())
-            .subquery()
-        )
-
-        total = db.query(func.count()).select_from(rep_ids_sq).scalar() or 0
-        pages = max(1, (total + per_page - 1) // per_page)
-
-        rows_q = (
-            db.query(JobRow, dup_count_sq.c.dup_count)
-            .outerjoin(
-                dup_count_sq,
-                and_(
-                    JobRow.company == dup_count_sq.c.dc_company,
-                    title_l == dup_count_sq.c.dc_title,
-                ),
-            )
-            .filter(JobRow.id.in_(db.query(rep_ids_sq)))
-            .order_by(*order)
-            .offset((page - 1) * per_page)
-            .limit(per_page)
-            .all()
-        )
-
-        items = []
-        for row, dc in rows_q:
-            d = row.to_dict()
-            d["duplicate_count"] = dc or 1
-            items.append(d)
-
-        _attach_detected_skills(items, db)
-        return {
-            "items": items,
-            "total": total,
-            "page": page,
-            "per_page": per_page,
-            "pages": pages,
-        }
-
-    # Normal (non-grouped) flow
-    total = q.count()
-    pages = max(1, (total + per_page - 1) // per_page)
-
-    ids_subq = q.with_entities(JobRow.id).subquery()
-    rows_q = (
-        db.query(JobRow, dup_count_sq.c.dup_count)
-        .outerjoin(
-            dup_count_sq,
-            and_(
-                JobRow.company == dup_count_sq.c.dc_company,
-                title_l == dup_count_sq.c.dc_title,
-            ),
-        )
-        .filter(JobRow.id.in_(select(ids_subq.c.id)))
-        .order_by(*order)
-        .offset((page - 1) * per_page)
-        .limit(per_page)
-        .all()
-    )
-
-    items = []
-    for row, dc in rows_q:
-        d = row.to_dict()
-        d["duplicate_count"] = dc or 1
-        items.append(d)
-
-    _attach_detected_skills(items, db)
-    return {
-        "items": items,
-        "total": total,
-        "page": page,
-        "per_page": per_page,
-        "pages": pages,
-    }
+    return jobs_service.list_jobs(db, params)
 
 
 @router.get("/categories")
 def list_categories(db: Session = Depends(get_db)):
-    rows = (
-        db.query(JobRow.category)
-        .filter(JobRow.category.isnot(None), JobRow.category != "")
-        .distinct()
-        .order_by(JobRow.category)
-        .all()
-    )
-    return [r[0] for r in rows]
+    return jobs_service.list_categories(db)
 
 
 @router.get("/work-types")
 def list_work_types(db: Session = Depends(get_db)):
-    rows = (
-        db.query(JobRow.work_type)
-        .filter(JobRow.work_type.isnot(None), JobRow.work_type != "")
-        .distinct()
-        .order_by(JobRow.work_type)
-        .all()
-    )
-    return [r[0] for r in rows]
+    return jobs_service.list_work_types(db)
 
 
 @router.get("/locations")
 def list_locations(db: Session = Depends(get_db)):
-    rows = (
-        db.query(func.unnest(JobRow.location).label("loc"))
-        .group_by("loc")
-        .order_by(func.count().desc())
-        .limit(50)
-        .all()
-    )
-    return [r[0] for r in rows]
+    return jobs_service.list_locations(db)
 
 
 @router.get("/seniorities")
 def list_seniorities(db: Session = Depends(get_db)):
-    rows = (
-        db.query(JobRow.seniority)
-        .filter(
-            JobRow.seniority.isnot(None),
-            JobRow.seniority != "",
-            JobRow.seniority.notin_(SENIORITY_BLACKLIST),
-        )
-        .distinct()
-        .order_by(JobRow.seniority)
-        .all()
-    )
-    return [r[0] for r in rows]
+    return jobs_service.list_seniorities(db)
 
 
 @router.get("/top-skills")
 def list_top_skills(top: int = Query(50, ge=1, le=200), db: Session = Depends(get_db)):
     """Return top N skill names for autocomplete."""
-    from sqlalchemy import literal_column
-    skill = func.unnest(JobRow.skills_required).label("skill")
-    rows = (
-        db.query(skill, func.count().label("cnt"))
-        .select_from(JobRow)
-        .group_by(literal_column("skill"))
-        .order_by(func.count().desc())
-        .limit(top)
-        .all()
-    )
-    return [r[0] for r in rows]
+    return jobs_service.list_top_skills(db, top)
 
 
 @router.get("/analytics")
@@ -341,297 +145,20 @@ def analytics(
     group_duplicates: bool = Query(False),
     db: Session = Depends(get_db),
 ):
-    def _base():
-        q = db.query(JobRow)
-        if source:
-            q = q.filter(JobRow.source.ilike(f"%{source}%"))
-        if category:
-            q = q.filter(JobRow.category == category)
-        if seniority:
-            parts = [s.strip() for s in seniority.split(",") if s.strip()]
-            if len(parts) == 1:
-                q = q.filter(JobRow.seniority.ilike(f"%{parts[0]}%"))
-            else:
-                q = q.filter(JobRow.seniority.in_(parts))
-        if work_type:
-            q = q.filter(JobRow.work_type.ilike(f"%{work_type}%"))
-        if location:
-            q = q.filter(JobRow.location.any(location))
-        skill_list = [s.strip() for s in (skills or skill or "").split(",") if s.strip()]
-        for s in skill_list:
-            q = q.filter(
-                or_(
-                    JobRow.skills_required.any(s),
-                    JobRow.skills_nice_to_have.any(s),
-                )
-            )
-        if search:
-            pattern = f"%{search}%"
-            q = q.filter(
-                or_(
-                    JobRow.title.ilike(pattern),
-                    JobRow.company.ilike(pattern),
-                    JobRow.description.ilike(pattern),
-                )
-            )
-        if is_reposted is not None:
-            q = q.filter(JobRow.is_reposted == is_reposted)
-        if saved is not None:
-            q = q.filter(JobRow.saved == saved)
-        return q
-
-    base_q = _base()
-    title_l = func.lower(JobRow.title)
-    group_key = tuple_(JobRow.company, title_l)
-
-    if group_duplicates:
-        # One row per (company, title) with a representative status; then count by status.
-        # Subquery avoids COUNT(DISTINCT (a,b)) which can be unreliable across DBs.
-        status_subq = (
-            base_q.with_entities(
-                JobRow.company,
-                title_l,
-                func.max(JobRow.status).label("status"),
-            )
-            .group_by(JobRow.company, title_l)
-            .subquery()
-        )
-        total = db.query(func.count()).select_from(status_subq).scalar() or 0
-        status_rows = (
-            db.query(status_subq.c.status, func.count())
-            .group_by(status_subq.c.status)
-            .all()
-        )
-        by_status = {r[0]: r[1] for r in status_rows}
-
-        saved_subq = (
-            base_q.filter(JobRow.saved.is_(True))
-            .with_entities(JobRow.company, title_l)
-            .distinct()
-            .subquery()
-        )
-        saved_count = db.query(func.count()).select_from(saved_subq).scalar() or 0
-
-        source_rows = (
-            base_q.with_entities(JobRow.source, func.count(func.distinct(group_key)))
-            .group_by(JobRow.source).all()
-        )
-        by_source = {r[0]: r[1] for r in source_rows}
-
-        cat_rows = (
-            base_q.with_entities(JobRow.category, func.count(func.distinct(group_key)))
-            .filter(JobRow.category.isnot(None), JobRow.category != "")
-            .group_by(JobRow.category)
-            .order_by(func.count(func.distinct(group_key)).desc()).limit(20).all()
-        )
-        by_category = [{"category": r[0], "count": r[1]} for r in cat_rows]
-
-        sen_rows = (
-            base_q.with_entities(JobRow.seniority, func.count(func.distinct(group_key)))
-            .filter(
-                JobRow.seniority.isnot(None),
-                JobRow.seniority != "",
-                JobRow.seniority.notin_(SENIORITY_BLACKLIST),
-            )
-            .group_by(JobRow.seniority)
-            .order_by(func.count(func.distinct(group_key)).desc()).all()
-        )
-        by_seniority = [{"seniority": r[0], "count": r[1]} for r in sen_rows]
-
-        wt_rows = (
-            base_q.with_entities(JobRow.work_type, func.count(func.distinct(group_key)))
-            .filter(JobRow.work_type.isnot(None), JobRow.work_type != "")
-            .group_by(JobRow.work_type)
-            .order_by(func.count(func.distinct(group_key)).desc()).all()
-        )
-        by_work_type = [{"work_type": r[0], "count": r[1]} for r in wt_rows]
-
-        reposted_count = (
-            base_q.filter(JobRow.is_reposted.is_(True))
-            .with_entities(func.count(func.distinct(group_key))).scalar() or 0
-        )
-
-        company_rows = (
-            base_q.with_entities(JobRow.company, func.count(func.distinct(group_key)))
-            .group_by(JobRow.company)
-            .order_by(func.count(func.distinct(group_key)).desc()).limit(15).all()
-        )
-        top_companies = [{"company": r[0], "count": r[1]} for r in company_rows]
-
-        # Salary: one avg per (company, title) then average across groups
-        sal_subq = (
-            base_q.filter(JobRow.salary_min_pln.isnot(None))
-            .with_entities(
-                group_key,
-                func.avg(JobRow.salary_min_pln).label("am"),
-                func.avg(JobRow.salary_max_pln).label("ax"),
-                func.max(JobRow.category).label("cat"),
-            )
-            .group_by(JobRow.company, title_l)
-            .subquery()
-        )
-        avg_min = db.query(func.avg(sal_subq.c.am)).scalar()
-        avg_max = db.query(func.avg(sal_subq.c.ax)).scalar()
-        sal_by_cat_q = (
-            db.query(
-                sal_subq.c.cat,
-                func.round(cast(func.avg(sal_subq.c.am), Numeric), 0),
-                func.round(cast(func.avg(sal_subq.c.ax), Numeric), 0),
-            )
-            .filter(sal_subq.c.cat.isnot(None), sal_subq.c.cat != "")
-            .group_by(sal_subq.c.cat)
-            .order_by(func.avg(sal_subq.c.ax).desc())
-            .limit(15).all()
-        )
-
-        # Timeline: one date per (company, title) = min(date_added), then count by date
-        timeline_subq = (
-            base_q.filter(JobRow.date_added.isnot(None))
-            .with_entities(group_key, func.min(JobRow.date_added).label("d"))
-            .group_by(JobRow.company, title_l)
-            .subquery()
-        )
-        timeline_rows = (
-            db.query(timeline_subq.c.d, func.count())
-            .group_by(timeline_subq.c.d)
-            .order_by(timeline_subq.c.d).all()
-        )
-        added_over_time = [{"date": r[0], "count": r[1]} for r in timeline_rows]
-
-        # Top locations: one row per (company, title) then unnest locations.
-        # Use DISTINCT ON instead of min(id) since PostgreSQL has no min(uuid).
-        id_subq = (
-            base_q.with_entities(JobRow.id)
-            .distinct(JobRow.company, title_l)
-            .order_by(JobRow.company, title_l, JobRow.created_at.desc())
-            .subquery()
-        )
-        loc_rows = (
-            db.query(func.unnest(JobRow.location).label("loc"), func.count())
-            .select_from(JobRow)
-            .join(id_subq, JobRow.id == id_subq.c.id)
-            .group_by("loc")
-            .order_by(func.count().desc()).limit(15).all()
-        )
-        top_locations = [{"location": r[0], "count": r[1]} for r in loc_rows]
-    else:
-        total = base_q.count()
-
-        status_rows = (
-            base_q.with_entities(JobRow.status, func.count())
-            .group_by(JobRow.status)
-            .all()
-        )
-        by_status = {r[0]: r[1] for r in status_rows}
-
-        saved_count = base_q.filter(JobRow.saved.is_(True)).count()
-
-        source_rows = (
-            base_q.with_entities(JobRow.source, func.count())
-            .group_by(JobRow.source).all()
-        )
-        by_source = {r[0]: r[1] for r in source_rows}
-
-        cat_rows = (
-            base_q.with_entities(JobRow.category, func.count())
-            .filter(JobRow.category.isnot(None), JobRow.category != "")
-            .group_by(JobRow.category)
-            .order_by(func.count().desc()).limit(20).all()
-        )
-        by_category = [{"category": r[0], "count": r[1]} for r in cat_rows]
-
-        sen_rows = (
-            base_q.with_entities(JobRow.seniority, func.count())
-            .filter(
-                JobRow.seniority.isnot(None),
-                JobRow.seniority != "",
-                JobRow.seniority.notin_(SENIORITY_BLACKLIST),
-            )
-            .group_by(JobRow.seniority)
-            .order_by(func.count().desc()).all()
-        )
-        by_seniority = [{"seniority": r[0], "count": r[1]} for r in sen_rows]
-
-        wt_rows = (
-            base_q.with_entities(JobRow.work_type, func.count())
-            .filter(JobRow.work_type.isnot(None), JobRow.work_type != "")
-            .group_by(JobRow.work_type)
-            .order_by(func.count().desc()).all()
-        )
-        by_work_type = [{"work_type": r[0], "count": r[1]} for r in wt_rows]
-
-        avg_min = (
-            base_q.with_entities(func.avg(JobRow.salary_min_pln))
-            .filter(JobRow.salary_min_pln.isnot(None)).scalar()
-        )
-        avg_max = (
-            base_q.with_entities(func.avg(JobRow.salary_max_pln))
-            .filter(JobRow.salary_max_pln.isnot(None)).scalar()
-        )
-
-        sal_by_cat_q = (
-            base_q.with_entities(
-                JobRow.category,
-                func.round(cast(func.avg(JobRow.salary_min_pln), Numeric), 0),
-                func.round(cast(func.avg(JobRow.salary_max_pln), Numeric), 0),
-            )
-            .filter(
-                JobRow.salary_min_pln.isnot(None),
-                JobRow.category.isnot(None),
-                JobRow.category != "",
-            )
-            .group_by(JobRow.category)
-            .order_by(func.avg(JobRow.salary_max_pln).desc())
-            .limit(15).all()
-        )
-
-        timeline_rows = (
-            base_q.with_entities(JobRow.date_added, func.count())
-            .filter(JobRow.date_added.isnot(None))
-            .group_by(JobRow.date_added)
-            .order_by(JobRow.date_added).all()
-        )
-        added_over_time = [{"date": r[0], "count": r[1]} for r in timeline_rows]
-
-        company_rows = (
-            _base().with_entities(JobRow.company, func.count())
-            .group_by(JobRow.company)
-            .order_by(func.count().desc()).limit(15).all()
-        )
-        top_companies = [{"company": r[0], "count": r[1]} for r in company_rows]
-
-        loc_rows = (
-            db.query(func.unnest(JobRow.location).label("loc"), func.count())
-            .select_from(JobRow)
-        )
-        if seniority:
-            loc_rows = loc_rows.filter(JobRow.seniority.ilike(f"%{seniority}%"))
-        loc_rows = loc_rows.group_by("loc").order_by(func.count().desc()).limit(15).all()
-        top_locations = [{"location": r[0], "count": r[1]} for r in loc_rows]
-
-        reposted_count = base_q.filter(JobRow.is_reposted.is_(True)).count()
-
-    return {
-        "total_jobs": total,
-        "by_status": by_status,
-        "saved_count": saved_count,
-        "by_source": by_source,
-        "by_category": by_category,
-        "by_seniority": by_seniority,
-        "by_work_type": by_work_type,
-        "salary_stats": {
-            "avg_min_pln": round(avg_min, 0) if avg_min else None,
-            "avg_max_pln": round(avg_max, 0) if avg_max else None,
-            "by_category": [
-                {"category": r[0], "avg_min": r[1], "avg_max": r[2]}
-                for r in sal_by_cat_q
-            ],
-        },
-        "added_over_time": added_over_time,
-        "top_companies": top_companies,
-        "top_locations": top_locations,
-        "reposted_count": reposted_count,
-    }
+    params = jobs_service.AnalyticsParams(
+        seniority=seniority,
+        source=source,
+        category=category,
+        skill=skill,
+        skills=skills,
+        search=search,
+        is_reposted=is_reposted,
+        work_type=work_type,
+        location=location,
+        saved=saved,
+        group_duplicates=group_duplicates,
+    )
+    return jobs_service.get_analytics(db, params)
 
 
 @router.post("/sync-embeddings")
@@ -654,8 +181,9 @@ def sync_embeddings(db: Session = Depends(get_db)):
             "Elasticsearch is not reachable. Ensure it is running.",
             status_code=503,
         )
+    ai_cfg = get_ai_config(db)
     rows = db.query(JobRow).all()
-    indexed = bulk_index_jobs(rows)
+    indexed = bulk_index_jobs(rows, embed_model=ai_cfg["embed_model"])
     return {"indexed": indexed, "total": len(rows)}
 
 
@@ -756,6 +284,7 @@ def sync_embeddings_stream(
             "Embedding sync is already running. Please wait for it to complete.",
             status_code=409,
         )
+    ai_cfg = get_ai_config(db)
     rows = db.query(JobRow).all()
 
     if mode == "full":
@@ -775,7 +304,7 @@ def sync_embeddings_stream(
             )
 
     async def stream_gen_async():
-        for event in bulk_index_jobs_stream(jobs_to_index):
+        for event in bulk_index_jobs_stream(jobs_to_index, embed_model=ai_cfg["embed_model"]):
             yield f"data: {json.dumps(event)}\n\n"
             await asyncio.sleep(0)  # Force flush to client
 

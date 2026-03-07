@@ -2,6 +2,7 @@
 
 import json
 import logging
+import time
 import uuid
 from typing import Annotated
 
@@ -12,6 +13,9 @@ from sqlalchemy.orm import Session
 from app.auth import get_current_user_optional, require_auth
 from app.database import get_db
 from app.models.resume import ResumeSummarizeRequest
+from app.services.ai_config_service import get_ai_config
+from app.services.inference_log_service import log_inference
+from app.services.user_service import get_or_create_user
 from app.models.tables import ResumeRow, UserRow
 from app.services.llm_service import summarize_resume_match, summarize_resume_match_stream
 from app.services.resume_keywords import extract_keywords_from_pdf
@@ -23,7 +27,6 @@ from app.services.resume_service import (
     RAG_ENABLED,
 )
 from app.services.skill_detector import _get_known_skills
-from app.services.user_service import get_or_create_user
 
 log = logging.getLogger(__name__)
 
@@ -109,7 +112,10 @@ async def analyze_resume(
 
         # RAG: merge semantic matches when enabled
         if RAG_ENABLED:
-            semantic_matches = retrieve_semantic_matches(db, extracted_skills, top_k=10)
+            ai_cfg = get_ai_config(db)
+            semantic_matches = retrieve_semantic_matches(
+                db, extracted_skills, top_k=10, embed_model=ai_cfg["embed_model"]
+            )
             matches = merge_keyword_and_semantic_matches(
                 keyword_matches, semantic_matches, max_total=8
             )
@@ -147,34 +153,85 @@ async def analyze_resume(
 
 
 @router.post("/summarize")
-async def summarize_match(body: ResumeSummarizeRequest = Body(...)):
+async def summarize_match(
+    body: ResumeSummarizeRequest = Body(...),
+    db: Session = Depends(get_db),
+    user: Annotated[dict | None, Depends(get_current_user_optional)] = None,
+):
     """
     Generate AI summary for resume-job match data. Call this on user request after analyze.
     Returns 503 if LLM is disabled or unavailable.
+    Uses AI config from DB; model_override in body overrides for this request.
     """
     extracted_skills = body.extracted_skills or []
     matches = body.matches or []
     by_category = body.by_category or []
-    summary = await summarize_resume_match(extracted_skills, matches, by_category)
+    ai_cfg = get_ai_config(db)
+    model = (body.model_override or "").strip() or ai_cfg["llm_model"]
+
+    start = time.perf_counter()
+    summary, eval_count = await summarize_resume_match(
+        extracted_skills,
+        matches,
+        by_category,
+        model=model or None,
+        max_tokens=ai_cfg["max_output_tokens"],
+        temperature=ai_cfg["temperature"],
+    )
+    latency_ms = int((time.perf_counter() - start) * 1000)
+
     if summary is None:
         raise HTTPException(
             503,
             "AI summary unavailable. Ensure Ollama is running with a model (e.g. ollama pull phi3:mini).",
         )
+
+    user_id = None
+    if user:
+        db_user = get_or_create_user(
+            db,
+            keycloak_id=user["sub"],
+            email=user.get("email"),
+            username=user.get("preferred_username"),
+        )
+        user_id = db_user.id
+
+    log_inference(
+        db,
+        model=model or ai_cfg["llm_model"],
+        operation="summarize",
+        latency_ms=latency_ms,
+        output_tokens=eval_count,
+        user_id=user_id,
+    )
+
     return {"summary": summary}
 
 
 @router.post("/summarize/stream")
-async def summarize_match_stream(body: ResumeSummarizeRequest = Body(...)):
+async def summarize_match_stream(
+    body: ResumeSummarizeRequest = Body(...),
+    db: Session = Depends(get_db),
+):
     """
     Stream AI summary as Server-Sent Events. Each event is a JSON object with a "chunk" field.
+    Uses AI config from DB; model_override in body overrides for this request.
     """
     extracted_skills = body.extracted_skills or []
     matches = body.matches or []
     by_category = body.by_category or []
+    ai_cfg = get_ai_config(db)
+    model = (body.model_override or "").strip() or ai_cfg["llm_model"]
 
     async def generate():
-        async for chunk in summarize_resume_match_stream(extracted_skills, matches, by_category):
+        async for chunk in summarize_resume_match_stream(
+            extracted_skills,
+            matches,
+            by_category,
+            model=model or None,
+            max_tokens=ai_cfg["max_output_tokens"],
+            temperature=ai_cfg["temperature"],
+        ):
             payload = json.dumps({"chunk": chunk})
             yield f"data: {payload}\n\n"
 

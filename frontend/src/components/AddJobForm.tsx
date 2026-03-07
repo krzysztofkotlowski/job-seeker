@@ -32,7 +32,9 @@ export function AddJobForm({ onJobAdded }: Props) {
     try {
       const dupCheck = await api.checkDuplicate(url.trim());
       if (dupCheck.is_duplicate) {
-        setDuplicate(`Already tracked: "${dupCheck.existing_job?.title}" at ${dupCheck.existing_job?.company}`);
+        setDuplicate(
+          `Already tracked: "${dupCheck.existing_job?.title}" at ${dupCheck.existing_job?.company}`,
+        );
         setLoading(false);
         return;
       }
@@ -74,53 +76,105 @@ export function AddJobForm({ onJobAdded }: Props) {
           placeholder="Paste justjoin.it or nofluffjobs.com URL..."
           label="Job URL"
         />
-        <Button variant="contained" onClick={handleParse} disabled={loading || !url.trim()}>
+        <Button
+          variant="contained"
+          onClick={handleParse}
+          disabled={loading || !url.trim()}
+        >
           {loading ? "Parsing..." : "Parse"}
         </Button>
       </Box>
 
       {error && <Alert severity="error">{error}</Alert>}
-      {duplicate && <Alert severity="warning">Duplicate detected: {duplicate}</Alert>}
+      {duplicate && (
+        <Alert severity="warning">Duplicate detected: {duplicate}</Alert>
+      )}
 
       {preview && (
         <Paper variant="outlined" sx={{ p: 2, borderColor: "divider" }}>
-          <Box sx={{ display: "flex", alignItems: "flex-start", justifyContent: "space-between", mb: 2 }}>
+          <Box
+            sx={{
+              display: "flex",
+              alignItems: "flex-start",
+              justifyContent: "space-between",
+              mb: 2,
+            }}
+          >
             <Box>
-              <Typography variant="subtitle1" fontWeight={600}>{preview.title}</Typography>
+              <Typography variant="subtitle1" fontWeight={600}>
+                {preview.title}
+              </Typography>
               <Typography variant="body2" color="text.secondary">
-                {preview.company} · {preview.location.join(", ") || "No location"}
+                {preview.company} ·{" "}
+                {preview.location.join(", ") || "No location"}
               </Typography>
             </Box>
             <Chip label={preview.source} size="small" variant="outlined" />
           </Box>
 
-          <Box sx={{ display: "grid", gridTemplateColumns: "repeat(2, 1fr)", gap: 2, mb: 2 }}>
+          <Box
+            sx={{
+              display: "grid",
+              gridTemplateColumns: "repeat(2, 1fr)",
+              gap: 2,
+              mb: 2,
+            }}
+          >
             <Box>
-              <Typography variant="caption" color="text.secondary">Salary</Typography>
-              <Typography variant="body2">{formatParsedSalary(preview.salary)}</Typography>
+              <Typography variant="caption" color="text.secondary">
+                Salary
+              </Typography>
+              <Typography variant="body2">
+                {formatParsedSalary(preview.salary)}
+              </Typography>
             </Box>
             <Box>
-              <Typography variant="caption" color="text.secondary">Seniority</Typography>
-              <Typography variant="body2">{preview.seniority || "N/A"}</Typography>
+              <Typography variant="caption" color="text.secondary">
+                Seniority
+              </Typography>
+              <Typography variant="body2">
+                {preview.seniority || "N/A"}
+              </Typography>
             </Box>
             <Box>
-              <Typography variant="caption" color="text.secondary">Work Type</Typography>
-              <Typography variant="body2">{preview.work_type || "N/A"}</Typography>
+              <Typography variant="caption" color="text.secondary">
+                Work Type
+              </Typography>
+              <Typography variant="body2">
+                {preview.work_type || "N/A"}
+              </Typography>
             </Box>
             <Box>
-              <Typography variant="caption" color="text.secondary">Contract</Typography>
-              <Typography variant="body2">{preview.employment_types.join(", ") || "N/A"}</Typography>
+              <Typography variant="caption" color="text.secondary">
+                Contract
+              </Typography>
+              <Typography variant="body2">
+                {preview.employment_types.join(", ") || "N/A"}
+              </Typography>
             </Box>
           </Box>
 
           {preview.skills_required.length > 0 && (
             <Box sx={{ mb: 1 }}>
-              <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ textTransform: "uppercase" }}
+              >
                 Required Skills
               </Typography>
-              <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mt: 0.5 }}>
+              <Box
+                sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mt: 0.5 }}
+              >
                 {preview.skills_required.map((s) => (
-                  <Chip key={s} label={s} size="small" color="primary" variant="outlined" sx={{ height: 22, fontSize: 11 }} />
+                  <Chip
+                    key={s}
+                    label={s}
+                    size="small"
+                    color="primary"
+                    variant="outlined"
+                    sx={{ height: 22, fontSize: 11 }}
+                  />
                 ))}
               </Box>
             </Box>
@@ -128,22 +182,45 @@ export function AddJobForm({ onJobAdded }: Props) {
 
           {preview.skills_nice_to_have.length > 0 && (
             <Box sx={{ mb: 2 }}>
-              <Typography variant="caption" color="text.secondary" sx={{ textTransform: "uppercase" }}>
+              <Typography
+                variant="caption"
+                color="text.secondary"
+                sx={{ textTransform: "uppercase" }}
+              >
                 Nice to Have
               </Typography>
-              <Box sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mt: 0.5 }}>
+              <Box
+                sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mt: 0.5 }}
+              >
                 {preview.skills_nice_to_have.map((s) => (
-                  <Chip key={s} label={s} size="small" variant="outlined" sx={{ height: 22, fontSize: 11 }} />
+                  <Chip
+                    key={s}
+                    label={s}
+                    size="small"
+                    variant="outlined"
+                    sx={{ height: 22, fontSize: 11 }}
+                  />
                 ))}
               </Box>
             </Box>
           )}
 
           <Box sx={{ display: "flex", gap: 1, pt: 1 }}>
-            <Button variant="contained" color="success" onClick={handleSave} disabled={saving}>
+            <Button
+              variant="contained"
+              color="success"
+              onClick={handleSave}
+              disabled={saving}
+            >
               {saving ? "Saving..." : "Save & Track"}
             </Button>
-            <Button variant="outlined" onClick={() => { setPreview(null); setUrl(""); }}>
+            <Button
+              variant="outlined"
+              onClick={() => {
+                setPreview(null);
+                setUrl("");
+              }}
+            >
               Discard
             </Button>
           </Box>

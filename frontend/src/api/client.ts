@@ -10,6 +10,9 @@ import type {
   AnalyticsData,
   ResumeAnalyzeResult,
   ResumeRecommendation,
+  OllamaModel,
+  AIConfig,
+  AIMetrics,
 } from "./types";
 import { getTokenForRequest } from "../auth/tokenProvider";
 
@@ -18,7 +21,8 @@ const BASE = "/api/v1";
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const token = await getTokenForRequest();
   const headers = new Headers(init?.headers);
-  if (!headers.has("Content-Type")) headers.set("Content-Type", "application/json");
+  if (!headers.has("Content-Type"))
+    headers.set("Content-Type", "application/json");
   if (token) headers.set("Authorization", `Bearer ${token}`);
   const res = await fetch(`${BASE}${path}`, { ...init, headers });
   if (!res.ok) {
@@ -88,23 +92,36 @@ export const api = {
 
   updateJob: (
     id: string,
-    update: { status?: JobStatus; notes?: string; applied_date?: string; is_reposted?: boolean; saved?: boolean },
+    update: {
+      status?: JobStatus;
+      notes?: string;
+      applied_date?: string;
+      is_reposted?: boolean;
+      saved?: boolean;
+    },
   ) =>
     request<Job>(`/jobs/${id}`, {
       method: "PATCH",
       body: JSON.stringify(update),
     }),
 
-  deleteJob: (id: string) =>
-    request<void>(`/jobs/${id}`, { method: "DELETE" }),
+  deleteJob: (id: string) => request<void>(`/jobs/${id}`, { method: "DELETE" }),
 
   findByUrl: (url: string) =>
     request<{ id: string }>(`/jobs/find-by-url?url=${encodeURIComponent(url)}`),
 
   checkDuplicate: (url: string) =>
-    request<DuplicateCheck>(`/jobs/check-duplicate?url=${encodeURIComponent(url)}`),
+    request<DuplicateCheck>(
+      `/jobs/check-duplicate?url=${encodeURIComponent(url)}`,
+    ),
 
-  skillsSummary: (params?: { top?: number; category?: string; page?: number; per_page?: number; search?: string }) => {
+  skillsSummary: (params?: {
+    top?: number;
+    category?: string;
+    page?: number;
+    per_page?: number;
+    search?: string;
+  }) => {
     const sp = new URLSearchParams();
     if (params) {
       if (params.top) sp.set("top", String(params.top));
@@ -145,11 +162,18 @@ export const api = {
 
   /** Embedding index status for RAG. */
   embeddingStatus: () =>
-    request<{ available: boolean; indexed: number; total: number; syncing?: boolean }>("/jobs/embedding-status"),
+    request<{
+      available: boolean;
+      indexed: number;
+      total: number;
+      syncing?: boolean;
+    }>("/jobs/embedding-status"),
 
   /** Clear the embedding index. */
   clearEmbeddingIndex: () =>
-    request<{ cleared: boolean }>("/jobs/embedding-index", { method: "DELETE" }),
+    request<{ cleared: boolean }>("/jobs/embedding-index", {
+      method: "DELETE",
+    }),
 
   /** Sync embeddings (non-streaming). */
   syncEmbeddings: () =>
@@ -174,8 +198,17 @@ export const api = {
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      const msg = body?.detail || body?.error?.message || `Embedding sync failed: ${res.status}`;
-      throw new Error(typeof msg === "string" ? msg : Array.isArray(msg) ? msg[0]?.msg || String(msg) : String(msg));
+      const msg =
+        body?.detail ||
+        body?.error?.message ||
+        `Embedding sync failed: ${res.status}`;
+      throw new Error(
+        typeof msg === "string"
+          ? msg
+          : Array.isArray(msg)
+            ? msg[0]?.msg || String(msg)
+            : String(msg),
+      );
     }
     const reader = res.body?.getReader();
     if (!reader) throw new Error("No response body");
@@ -191,8 +224,15 @@ export const api = {
       for (const line of lines) {
         if (line.startsWith("data: ")) {
           try {
-            const parsed = JSON.parse(line.slice(6)) as { indexed?: number; total?: number; done?: boolean };
-            if (typeof parsed.indexed === "number" && typeof parsed.total === "number") {
+            const parsed = JSON.parse(line.slice(6)) as {
+              indexed?: number;
+              total?: number;
+              done?: boolean;
+            };
+            if (
+              typeof parsed.indexed === "number" &&
+              typeof parsed.total === "number"
+            ) {
               lastResult = { indexed: parsed.indexed, total: parsed.total };
               onProgress(parsed.indexed, parsed.total, Boolean(parsed.done));
             }
@@ -206,7 +246,9 @@ export const api = {
   },
 
   detectedSkills: (jobId: string) =>
-    request<DetectedSkill[]>(`/skills/detected?job_id=${encodeURIComponent(jobId)}`),
+    request<DetectedSkill[]>(
+      `/skills/detected?job_id=${encodeURIComponent(jobId)}`,
+    ),
 
   analytics: (params?: {
     seniority?: string;
@@ -228,11 +270,13 @@ export const api = {
     if (params?.skill) sp.set("skill", params.skill);
     if (params?.skills) sp.set("skills", params.skills);
     if (params?.search) sp.set("search", params.search);
-    if (params?.is_reposted !== undefined) sp.set("is_reposted", String(params.is_reposted));
+    if (params?.is_reposted !== undefined)
+      sp.set("is_reposted", String(params.is_reposted));
     if (params?.work_type) sp.set("work_type", params.work_type);
     if (params?.location) sp.set("location", params.location);
     if (params?.saved !== undefined) sp.set("saved", String(params.saved));
-    if (params?.group_duplicates !== undefined) sp.set("group_duplicates", String(params.group_duplicates));
+    if (params?.group_duplicates !== undefined)
+      sp.set("group_duplicates", String(params.group_duplicates));
     const qs = sp.toString();
     return request<AnalyticsData>(`/jobs/analytics${qs ? `?${qs}` : ""}`);
   },
@@ -242,7 +286,10 @@ export const api = {
     const token = await getTokenForRequest();
     const headers = new Headers();
     if (token) headers.set("Authorization", `Bearer ${token}`);
-    const res = await fetch(`${BASE}/backup/create`, { method: "POST", headers });
+    const res = await fetch(`${BASE}/backup/create`, {
+      method: "POST",
+      headers,
+    });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
       throw new Error(body.detail || `Backup failed: ${res.status}`);
@@ -251,7 +298,10 @@ export const api = {
   },
 
   /** Upload resume (PDF or JSON), extract keywords, return job matches. */
-  resumeAnalyze: async (file: File, signal?: AbortSignal): Promise<ResumeAnalyzeResult> => {
+  resumeAnalyze: async (
+    file: File,
+    signal?: AbortSignal,
+  ): Promise<ResumeAnalyzeResult> => {
     const token = await getTokenForRequest();
     const form = new FormData();
     form.append("file", file);
@@ -265,7 +315,10 @@ export const api = {
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      const msg = body?.detail || body?.error?.message || `Resume analyze failed: ${res.status}`;
+      const msg =
+        body?.detail ||
+        body?.error?.message ||
+        `Resume analyze failed: ${res.status}`;
       throw new Error(Array.isArray(msg) ? msg[0]?.msg || String(msg) : msg);
     }
     return res.json();
@@ -273,14 +326,38 @@ export const api = {
 
   /** Fetch hybrid search recommendations for extracted skills. Called in background after analyze. */
   resumeRecommendations: (extracted_skills: string[]) =>
-    request<{ recommendations: ResumeRecommendation[] }>("/resume/recommendations", {
-      method: "POST",
-      body: JSON.stringify({ extracted_skills }),
+    request<{ recommendations: ResumeRecommendation[] }>(
+      "/resume/recommendations",
+      {
+        method: "POST",
+        body: JSON.stringify({ extracted_skills }),
+      },
+    ),
+
+  /** List available Ollama models. */
+  aiListModels: () => request<{ models: OllamaModel[] }>("/ai/models"),
+
+  /** Get current AI config. */
+  aiGetConfig: () => request<AIConfig>("/ai/config"),
+
+  /** Update AI config. */
+  aiUpdateConfig: (config: Partial<AIConfig>) =>
+    request<AIConfig>("/ai/config", {
+      method: "PUT",
+      body: JSON.stringify(config),
     }),
+
+  /** Get AI inference metrics. */
+  aiGetMetrics: () => request<AIMetrics>("/ai/metrics"),
 
   /** Generate AI summary for resume analysis. Call after analyze. */
   resumeSummarize: async (
-    data: { extracted_skills: string[]; matches: unknown[]; by_category: unknown[] },
+    data: {
+      extracted_skills: string[];
+      matches: unknown[];
+      by_category: unknown[];
+      model_override?: string;
+    },
     signal?: AbortSignal,
   ): Promise<{ summary: string }> => {
     const token = await getTokenForRequest();
@@ -295,15 +372,27 @@ export const api = {
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      const msg = body?.detail || body?.error?.message || `Summary failed: ${res.status}`;
-      throw new Error(typeof msg === "string" ? msg : Array.isArray(msg) ? msg[0]?.msg || String(msg) : String(msg));
+      const msg =
+        body?.detail || body?.error?.message || `Summary failed: ${res.status}`;
+      throw new Error(
+        typeof msg === "string"
+          ? msg
+          : Array.isArray(msg)
+            ? msg[0]?.msg || String(msg)
+            : String(msg),
+      );
     }
     return res.json();
   },
 
   /** Stream AI summary. Calls onChunk for each chunk, returns {summary, recommendations}. */
   resumeSummarizeStream: async (
-    data: { extracted_skills: string[]; matches: unknown[]; by_category: unknown[] },
+    data: {
+      extracted_skills: string[];
+      matches: unknown[];
+      by_category: unknown[];
+      model_override?: string;
+    },
     onChunk: (chunk: string) => void,
     signal?: AbortSignal,
   ): Promise<{ summary: string; recommendations: ResumeRecommendation[] }> => {
@@ -319,8 +408,15 @@ export const api = {
     });
     if (!res.ok) {
       const body = await res.json().catch(() => ({}));
-      const msg = body?.detail || body?.error?.message || `Summary failed: ${res.status}`;
-      throw new Error(typeof msg === "string" ? msg : Array.isArray(msg) ? msg[0]?.msg || String(msg) : String(msg));
+      const msg =
+        body?.detail || body?.error?.message || `Summary failed: ${res.status}`;
+      throw new Error(
+        typeof msg === "string"
+          ? msg
+          : Array.isArray(msg)
+            ? msg[0]?.msg || String(msg)
+            : String(msg),
+      );
     }
     const reader = res.body?.getReader();
     if (!reader) throw new Error("No response body");

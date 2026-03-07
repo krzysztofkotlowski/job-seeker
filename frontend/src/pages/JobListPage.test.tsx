@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { BrowserRouter } from "react-router-dom";
 import { vi } from "vitest";
 
@@ -92,11 +93,22 @@ const defaultJob: Job = {
   duplicate_count: 1,
 };
 
+function createTestQueryClient() {
+  return new QueryClient({
+    defaultOptions: {
+      queries: { retry: false },
+    },
+  });
+}
+
 function renderWithRouter(ui: React.ReactElement) {
+  const queryClient = createTestQueryClient();
   return render(
-    <BrowserRouter>
-      <ToastProvider>{ui}</ToastProvider>
-    </BrowserRouter>
+    <QueryClientProvider client={queryClient}>
+      <BrowserRouter>
+        <ToastProvider>{ui}</ToastProvider>
+      </BrowserRouter>
+    </QueryClientProvider>,
   );
 }
 
@@ -128,10 +140,10 @@ describe("JobListPage", () => {
     await waitFor(() => expect(api.analytics).toHaveBeenCalled());
 
     expect(api.listJobs).toHaveBeenCalledWith(
-      expect.objectContaining({ group_duplicates: true })
+      expect.objectContaining({ group_duplicates: true }),
     );
     expect(api.analytics).toHaveBeenCalledWith(
-      expect.objectContaining({ group_duplicates: true })
+      expect.objectContaining({ group_duplicates: true }),
     );
   });
 
@@ -160,13 +172,15 @@ describe("JobListPage", () => {
 
     renderWithRouter(<JobListPage />);
 
-    expect(
-      await screen.findByText((_, el) => el?.textContent === "10 jobs found")
-    ).toBeInTheDocument();
+    await waitFor(
+      () => {
+        expect(screen.getByText((_, el) => el?.textContent === "10 jobs found")).toBeInTheDocument();
+      },
+      { timeout: 3000 },
+    );
     expect(screen.getByText(/All \(10\)/)).toBeInTheDocument();
     expect(screen.getByText(/New \(6\)/)).toBeInTheDocument();
     expect(screen.getByText(/Seen \(4\)/)).toBeInTheDocument();
     expect(screen.getByText(/Saved \(2\)/)).toBeInTheDocument();
   });
 });
-

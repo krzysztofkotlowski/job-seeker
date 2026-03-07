@@ -30,7 +30,7 @@ function renderWithRouter(ui: React.ReactElement) {
   return render(
     <BrowserRouter>
       <ToastProvider>{ui}</ToastProvider>
-    </BrowserRouter>
+    </BrowserRouter>,
   );
 }
 

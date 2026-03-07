@@ -54,7 +54,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             );
           })
           .catch(() => {
-            setConfig((c) => (c ? { ...c, enabled: false } : { enabled: false }));
+            setConfig((c) =>
+              c ? { ...c, enabled: false } : { enabled: false },
+            );
             setTokenProvider(null);
           });
       })

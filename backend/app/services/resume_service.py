@@ -5,6 +5,7 @@ import os
 from collections import defaultdict
 from uuid import UUID
 
+from sqlalchemy import or_
 from sqlalchemy.orm import Session
 
 from app.models.tables import JobRow
@@ -13,18 +14,40 @@ log = logging.getLogger(__name__)
 
 RAG_ENABLED = os.environ.get("RAG_ENABLED", "false").lower() in ("1", "true", "yes")
 
+DEFAULT_MATCH_LIMIT = 100
+
 
 def _normalize(s: str) -> str:
     return (s or "").strip().lower()
 
 
-def match_jobs_to_skills(db: Session, resume_skills: set[str]) -> list[dict]:
-    """Return jobs with match_ratio and matched_skills, sorted by match_count desc."""
+def match_jobs_to_skills(
+    db: Session,
+    resume_skills: set[str],
+    limit: int | None = DEFAULT_MATCH_LIMIT,
+) -> list[dict]:
+    """
+    Return jobs with match_ratio and matched_skills, sorted by match_count desc.
+
+    limit: max number of matches to return (None = no limit). Default 100 to avoid
+    returning excessive results when the job database is large.
+    """
     target = {_normalize(s) for s in resume_skills if s and isinstance(s, str) and s.strip()}
     if not target:
         return []
 
-    rows = db.query(JobRow).all()
+    skill_list = [s.strip() for s in resume_skills if s and isinstance(s, str) and s.strip()]
+    if not skill_list:
+        return []
+
+    q = db.query(JobRow).filter(
+        or_(
+            or_(*(JobRow.skills_required.any(s) for s in skill_list)),
+            or_(*(JobRow.skills_nice_to_have.any(s) for s in skill_list)),
+        )
+    )
+    rows = q.all()
+
     results = []
     for row in rows:
         raw_skills = (row.skills_required or []) + (row.skills_nice_to_have or [])
@@ -41,6 +64,8 @@ def match_jobs_to_skills(db: Session, resume_skills: set[str]) -> list[dict]:
             })
 
     results.sort(key=lambda x: x["match_count"], reverse=True)
+    if limit is not None:
+        results = results[:limit]
     return results
 
 
@@ -122,6 +147,7 @@ def retrieve_semantic_matches(
     db: Session,
     extracted_skills: set[str],
     top_k: int = 10,
+    embed_model: str | None = None,
 ) -> list[dict]:
     """
     RAG: embed resume skills, kNN search in Elasticsearch, return matches with full job dict.
@@ -138,7 +164,7 @@ def retrieve_semantic_matches(
     query_text = " ".join(sorted(extracted_skills)) if extracted_skills else ""
     if not query_text.strip():
         return []
-    embedding = embed_text(query_text)
+    embedding = embed_text(query_text, model=embed_model)
     if not embedding:
         return []
     hits = search_similar(query_embedding=embedding, top_k=top_k)
@@ -169,6 +195,7 @@ def retrieve_hybrid_recommendations(
     db: Session,
     extracted_skills: set[str],
     top_k: int = 10,
+    embed_model: str | None = None,
 ) -> list[dict]:
     """
     RAG: hybrid search (vector + keyword) in Elasticsearch, return job recommendations with URLs from DB.
@@ -185,7 +212,7 @@ def retrieve_hybrid_recommendations(
     query_text = " ".join(sorted(extracted_skills)) if extracted_skills else ""
     if not query_text.strip():
         return []
-    embedding = embed_text(query_text)
+    embedding = embed_text(query_text, model=embed_model)
     if not embedding:
         return []
     hits = search_hybrid(query_text=query_text, query_embedding=embedding, top_k=top_k)

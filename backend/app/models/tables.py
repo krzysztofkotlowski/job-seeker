@@ -128,6 +128,34 @@ class DetectedSkillRow(Base):
     )
 
 
+class AIConfigRow(Base):
+    """Single-row AI config (LLM model, embedding model, params). id=1 is the active config."""
+
+    __tablename__ = "ai_config"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    llm_model = Column(String(255), nullable=False, default="phi3:mini")
+    embed_model = Column(String(255), nullable=False, default="nomic-embed-text")
+    temperature = Column(Float, nullable=False, default=0.3)
+    max_output_tokens = Column(Integer, nullable=False, default=1024)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+
+
+class InferenceLogRow(Base):
+    """Log of LLM inference calls for metrics."""
+
+    __tablename__ = "inference_logs"
+
+    id = Column(Integer, primary_key=True, autoincrement=True)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
+    model = Column(String(255), nullable=False)
+    operation = Column(String(50), nullable=False)
+    latency_ms = Column(Integer, nullable=True)
+    input_tokens = Column(Integer, nullable=True)
+    output_tokens = Column(Integer, nullable=True)
+    user_id = Column(Integer, ForeignKey("users.id", ondelete="SET NULL"), nullable=True, index=True)
+
+
 class ImportTaskRow(Base):
     __tablename__ = "import_tasks"
 

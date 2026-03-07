@@ -30,14 +30,16 @@ def is_available() -> bool:
     return False
 
 
-def embed_text(text: str) -> list[float] | None:
+def embed_text(text: str, model: str | None = None) -> list[float] | None:
     """
     Embed a single text string. Returns None if service unavailable or error.
+    model overrides EMBED_MODEL when provided.
     """
     if not EMBED_URL or not text or not str(text).strip():
         return None
+    effective_model = (model or "").strip() or EMBED_MODEL
     url = f"{EMBED_URL}/api/embed"
-    payload = {"model": EMBED_MODEL, "input": str(text).strip()[:8000]}
+    payload = {"model": effective_model, "input": str(text).strip()[:8000]}
     try:
         with httpx.Client(timeout=EMBED_TIMEOUT) as client:
             resp = client.post(url, json=payload)
@@ -55,18 +57,20 @@ def embed_text(text: str) -> list[float] | None:
     return None
 
 
-def embed_batch(texts: list[str]) -> list[list[float]]:
+def embed_batch(texts: list[str], model: str | None = None) -> list[list[float]]:
     """
     Embed multiple texts in one request. Returns list of vectors (or None for failed items).
     Ollama accepts array input for batch embedding.
+    model overrides EMBED_MODEL when provided.
     """
     if not EMBED_URL or not texts:
         return []
     cleaned = [str(t).strip()[:8000] for t in texts if t and str(t).strip()]
     if not cleaned:
         return []
+    effective_model = (model or "").strip() or EMBED_MODEL
     url = f"{EMBED_URL}/api/embed"
-    payload = {"model": EMBED_MODEL, "input": cleaned}
+    payload = {"model": effective_model, "input": cleaned}
     try:
         with httpx.Client(timeout=EMBED_TIMEOUT) as client:
             resp = client.post(url, json=payload)

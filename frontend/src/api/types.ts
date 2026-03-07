@@ -13,7 +13,13 @@ export interface DetectedSkill {
   source_field: string;
 }
 
-export type JobStatus = "new" | "seen" | "applied" | "interview" | "offer" | "rejected";
+export type JobStatus =
+  | "new"
+  | "seen"
+  | "applied"
+  | "interview"
+  | "offer"
+  | "rejected";
 
 export interface AlternateListing {
   id: string;
@@ -183,4 +189,35 @@ export interface ResumeAnalyzeResult {
   message?: string;
   summary?: string;
   recommendations?: ResumeRecommendation[];
+}
+
+export interface OllamaModel {
+  name: string;
+  model?: string;
+  modified_at?: string;
+  size?: number;
+  digest?: string;
+  details?: {
+    format?: string;
+    family?: string;
+    families?: string[];
+    parameter_size?: string;
+    quantization_level?: string;
+  };
+}
+
+export interface AIConfig {
+  llm_model: string;
+  embed_model: string;
+  temperature: number;
+  max_output_tokens: number;
+}
+
+export interface AIMetrics {
+  avg_latency_ms: number | null;
+  total_requests: number;
+  total_input_tokens: number;
+  total_output_tokens: number;
+  by_model: { model: string; count: number }[];
+  last_7_days: boolean;
 }

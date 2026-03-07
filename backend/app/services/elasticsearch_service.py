@@ -153,7 +153,7 @@ def get_jobs_not_indexed(jobs: list["JobRow"]) -> list["JobRow"]:
     return [j for j in jobs if str(j.id) not in indexed_ids]
 
 
-def index_job(job: "JobRow", embedding: list[float] | None = None) -> bool:
+def index_job(job: "JobRow", embedding: list[float] | None = None, embed_model: str | None = None) -> bool:
     """Index a single job. Generates embedding if not provided."""
     client = _get_client()
     if not client:
@@ -162,7 +162,7 @@ def index_job(job: "JobRow", embedding: list[float] | None = None) -> bool:
         return False
     text = _job_to_text(job)
     if embedding is None:
-        embedding = embed_text(text)
+        embedding = embed_text(text, model=embed_model)
     if not embedding or len(embedding) != EMBED_DIMS:
         return False
     try:
@@ -188,11 +188,11 @@ def index_job(job: "JobRow", embedding: list[float] | None = None) -> bool:
 BULK_BATCH_SIZE = 15
 
 
-def bulk_index_jobs(jobs: list["JobRow"]) -> int:
+def bulk_index_jobs(jobs: list["JobRow"], embed_model: str | None = None) -> int:
     """Batch embed and index jobs. Returns count of successfully indexed."""
     set_sync_in_progress(True)
     try:
-        return bulk_index_jobs_with_progress(jobs, on_progress=None)
+        return bulk_index_jobs_with_progress(jobs, on_progress=None, embed_model=embed_model)
     finally:
         set_sync_in_progress(False)
 
@@ -200,6 +200,7 @@ def bulk_index_jobs(jobs: list["JobRow"]) -> int:
 def bulk_index_jobs_with_progress(
     jobs: list["JobRow"],
     on_progress: Callable[[int, int], None] | None = None,
+    embed_model: str | None = None,
 ) -> int:
     """Batch embed and index jobs, optionally calling on_progress(indexed, total) after each batch."""
     if not jobs:
@@ -214,7 +215,7 @@ def bulk_index_jobs_with_progress(
     for i in range(0, total, BULK_BATCH_SIZE):
         batch = jobs[i : i + BULK_BATCH_SIZE]
         texts = [_job_to_text(j) for j in batch]
-        embeddings = embed_batch(texts)
+        embeddings = embed_batch(texts, model=embed_model)
         if len(embeddings) != len(batch):
             log.warning("Embedding count mismatch: got %d, expected %d", len(embeddings), len(batch))
             embeddings = embeddings[: len(batch)]
@@ -243,7 +244,7 @@ def bulk_index_jobs_with_progress(
     return indexed
 
 
-def bulk_index_jobs_stream(jobs: list["JobRow"]):
+def bulk_index_jobs_stream(jobs: list["JobRow"], embed_model: str | None = None):
     """
     Generator that indexes jobs in batches and yields progress events.
     Yields {"indexed": N, "total": M} during run, then {"done": True, "indexed": N, "total": M}.
@@ -265,7 +266,7 @@ def bulk_index_jobs_stream(jobs: list["JobRow"]):
         for i in range(0, total, BULK_BATCH_SIZE):
             batch = jobs[i : i + BULK_BATCH_SIZE]
             texts = [_job_to_text(j) for j in batch]
-            embeddings = embed_batch(texts)
+            embeddings = embed_batch(texts, model=embed_model)
             if len(embeddings) != len(batch):
                 log.warning("Embedding count mismatch: got %d, expected %d", len(embeddings), len(batch))
                 embeddings = embeddings[: len(batch)]

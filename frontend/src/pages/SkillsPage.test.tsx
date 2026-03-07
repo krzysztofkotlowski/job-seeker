@@ -29,7 +29,7 @@ function renderWithProviders(ui: React.ReactElement) {
   return render(
     <BrowserRouter>
       <ToastProvider>{ui}</ToastProvider>
-    </BrowserRouter>
+    </BrowserRouter>,
   );
 }
 
@@ -41,7 +41,9 @@ describe("SkillsPage", () => {
     await waitFor(() => expect(api.listCategories).toHaveBeenCalled());
 
     expect(await screen.findByText(/Skills Overview/)).toBeInTheDocument();
-    expect(await screen.findByText(/25 skills across 10 jobs/)).toBeInTheDocument();
+    expect(
+      await screen.findByText(/25 skills across 10 jobs/),
+    ).toBeInTheDocument();
     expect(await screen.findByText(/Python/)).toBeInTheDocument();
     expect(await screen.findByText(/JavaScript/)).toBeInTheDocument();
   });

@@ -1,4 +1,9 @@
-import type { Job, PaginatedResponse, AnalyticsData, ImportStatus } from "../api/types";
+import type {
+  Job,
+  PaginatedResponse,
+  AnalyticsData,
+  ImportStatus,
+} from "../api/types";
 
 export function createMockJob(overrides: Partial<Job> = {}): Job {
   return {
@@ -29,8 +34,12 @@ export function createMockJob(overrides: Partial<Job> = {}): Job {
   };
 }
 
-export function createMockPaginatedJobs(jobs: Partial<Job>[] = []): PaginatedResponse<Job> {
-  const items = jobs.length ? jobs.map((j) => createMockJob(j)) : [createMockJob()];
+export function createMockPaginatedJobs(
+  jobs: Partial<Job>[] = [],
+): PaginatedResponse<Job> {
+  const items = jobs.length
+    ? jobs.map((j) => createMockJob(j))
+    : [createMockJob()];
   return {
     items,
     total: items.length,
@@ -40,7 +49,9 @@ export function createMockPaginatedJobs(jobs: Partial<Job>[] = []): PaginatedRes
   };
 }
 
-export function createMockAnalytics(overrides: Partial<AnalyticsData> = {}): AnalyticsData {
+export function createMockAnalytics(
+  overrides: Partial<AnalyticsData> = {},
+): AnalyticsData {
   return {
     total_jobs: 1,
     by_status: { new: 1 },
@@ -58,7 +69,9 @@ export function createMockAnalytics(overrides: Partial<AnalyticsData> = {}): Ana
   };
 }
 
-export function createMockImportStatus(overrides: Partial<ImportStatus> = {}): ImportStatus {
+export function createMockImportStatus(
+  overrides: Partial<ImportStatus> = {},
+): ImportStatus {
   return {
     running: false,
     tasks: [

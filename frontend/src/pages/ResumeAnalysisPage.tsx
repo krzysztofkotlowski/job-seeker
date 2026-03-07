@@ -32,8 +32,10 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "../api/client";
 import type {
+  Job,
   ResumeAnalyzeResult,
   ResumeByCategory,
+  ResumeMatchItem,
   ResumeRecommendation,
   SkillWithWeight,
 } from "../api/types";
@@ -133,21 +135,82 @@ function toSkillWithWeight(x: unknown): SkillWithWeight {
   return { skill: String(x ?? ""), weight: 1 };
 }
 
+/** Raw API response shape (may include legacy fields). */
+interface RawResumeResponse {
+  extracted_skills?: string[];
+  extracted_keywords?: string[];
+  match_count?: number;
+  matches?: Array<{
+    job?: Partial<Job>;
+    matched_skills?: string[];
+    match_count?: number;
+    match_ratio?: number;
+  }>;
+  by_category?: Array<{
+    category?: string;
+    job_count?: number;
+    match_score?: number;
+    matching_skills?: unknown[];
+    skills_to_add?: unknown[];
+    skills_to_add_required?: unknown[];
+    skills_to_add_nice?: unknown[];
+  }>;
+  message?: string;
+  summary?: string;
+  recommendations?: ResumeRecommendation[];
+}
+
+function toResumeMatchItem(
+  m: NonNullable<RawResumeResponse["matches"]>[number],
+): ResumeMatchItem {
+  const job = (m?.job ?? {}) as Job;
+  return {
+    job: {
+      id: job.id ?? "",
+      url: job.url ?? "",
+      source: job.source ?? "",
+      title: job.title ?? "",
+      company: job.company ?? "",
+      location: job.location ?? [],
+      salary: job.salary ?? null,
+      skills_required: job.skills_required ?? [],
+      skills_nice_to_have: job.skills_nice_to_have ?? [],
+      seniority: job.seniority ?? null,
+      work_type: job.work_type ?? null,
+      employment_types: job.employment_types ?? [],
+      description: job.description ?? null,
+      category: job.category ?? null,
+      is_reposted: job.is_reposted ?? false,
+      original_job_id: job.original_job_id ?? null,
+      date_published: job.date_published ?? null,
+      date_expires: job.date_expires ?? null,
+      date_added: job.date_added ?? "",
+      status: (job.status as "new") ?? "new",
+      applied_date: job.applied_date ?? null,
+      notes: job.notes ?? "",
+      saved: job.saved ?? false,
+      duplicate_count: job.duplicate_count ?? 1,
+    },
+    matched_skills: Array.isArray(m?.matched_skills) ? m.matched_skills : [],
+    match_count: typeof m?.match_count === "number" ? m.match_count : 0,
+    match_ratio: typeof m?.match_ratio === "number" ? m.match_ratio : 0,
+  };
+}
+
 /** Normalize API response so we support both extracted_skills and legacy extracted_keywords. */
 function normalizeResult(
-  data: ResumeAnalyzeResult | null,
+  data: ResumeAnalyzeResult | RawResumeResponse | null,
 ): ResumeAnalyzeResult | null {
   if (!data || typeof data !== "object") return null;
-  const raw = data as unknown as Record<string, unknown>;
+  const raw = data as RawResumeResponse;
   const extracted = Array.isArray(raw.extracted_skills)
-    ? (raw.extracted_skills as string[])
+    ? raw.extracted_skills
     : Array.isArray(raw.extracted_keywords)
-      ? (raw.extracted_keywords as string[])
+      ? raw.extracted_keywords
       : [];
-  const byCategory = (
-    Array.isArray(data.by_category) ? data.by_category : []
-  ).map((c: unknown) => {
-    const cat = c as Record<string, unknown>;
+  const byCategory: ResumeByCategory[] = (
+    Array.isArray(raw.by_category) ? raw.by_category : []
+  ).map((cat) => {
     const matching = Array.isArray(cat.matching_skills)
       ? cat.matching_skills.map(toSkillWithWeight)
       : [];
@@ -171,21 +234,23 @@ function normalizeResult(
         ? Math.round((matching.reduce((a, x) => a + x.weight, 0) / total) * 100)
         : 0;
     return {
-      ...cat,
       category: cat.category ?? "",
       job_count: typeof cat.job_count === "number" ? cat.job_count : 0,
       match_score:
         typeof cat.match_score === "number" ? cat.match_score : matchScore,
       matching_skills: matching,
       skills_to_add: toAdd,
-    } as ResumeByCategory;
+    };
   });
+  const matches: ResumeMatchItem[] = Array.isArray(raw.matches)
+    ? raw.matches.map(toResumeMatchItem)
+    : [];
   return {
     extracted_skills: extracted,
-    match_count: typeof data.match_count === "number" ? data.match_count : 0,
-    matches: Array.isArray(data.matches) ? data.matches : [],
+    match_count: typeof raw.match_count === "number" ? raw.match_count : 0,
+    matches,
     by_category: byCategory,
-    message: data.message,
+    message: raw.message,
     summary: typeof raw.summary === "string" ? raw.summary : undefined,
     recommendations: Array.isArray(raw.recommendations)
       ? raw.recommendations

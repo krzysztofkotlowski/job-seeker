@@ -60,7 +60,7 @@ def test_resume_analyze_returns_without_summary(client: TestClient):
 def test_resume_summarize_returns_summary(client: TestClient):
     """Summarize endpoint returns AI summary when LLM responds."""
     async def fake_summary(*_args, **_kwargs):
-        return "Your resume matches well with Backend positions."
+        return ("Your resume matches well with Backend positions.", 42)
 
     with patch("app.routers.resume.summarize_resume_match", side_effect=fake_summary):
         r = client.post(
@@ -77,7 +77,7 @@ def test_resume_summarize_returns_summary(client: TestClient):
 
 def test_resume_summarize_503_when_llm_unavailable(client: TestClient):
     """Summarize returns 503 when LLM returns None."""
-    with patch("app.routers.resume.summarize_resume_match", new_callable=AsyncMock, return_value=None):
+    with patch("app.routers.resume.summarize_resume_match", new_callable=AsyncMock, return_value=(None, None)):
         r = client.post(
             "/api/v1/resume/summarize",
             json={"extracted_skills": ["Python"], "matches": [], "by_category": []},
