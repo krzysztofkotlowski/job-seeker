@@ -246,10 +246,9 @@ flowchart LR
 
 ### With Docker (recommended)
 
-**Prerequisites:** Docker Desktop with 6GB memory (Settings → Resources → Memory). phi3:mini runs smoothly at 6GB.
-
 ```bash
 # From project root (--compatibility applies Ollama CPU/memory limits to fix cgroup parsing)
+# Docker Desktop: allocate at least 6GB memory (Settings → Resources) for phi3:mini
 docker compose --compatibility up --build
 ```
 
@@ -277,7 +276,7 @@ ollama create jobseeker-advisor -f Modelfile
 
 **RAG (vector search):** When `RAG_ENABLED=true` and Elasticsearch is running, resume analysis uses semantic search to find additional job matches. After importing jobs, run `POST /api/v1/jobs/sync-embeddings` to index jobs for RAG. Pull the embedding model: `docker compose exec ollama ollama pull nomic-embed-text`.
 
-**LLM 500 error troubleshooting:** If you see "AI summary unavailable" with a 500 from Ollama: (1) Ensure the model is pulled: `docker compose exec ollama ollama pull phi3:mini`. (2) Test locally: `docker compose exec ollama ollama run phi3:mini "Hello"`. (3) Reduce `LLM_MAX_OUTPUT_TOKENS` to 512 if still failing. (4) Check backend logs for the full Ollama error response. (5) Update Ollama: `docker compose pull ollama` and restart. (6) **Cgroup "max" parsing bug:** If Ollama logs show `failed to parse CPU allowed micro secs` with `parsing "max": invalid syntax`, the container's cgroup reports unlimited CPU and Ollama fails to parse it. The project's `docker-compose.yml` sets `deploy.resources.limits` (cpus, memory) and `OLLAMA_NUM_THREAD` to work around this. Run with `docker compose --compatibility up` so these limits are applied (plain `docker compose up` ignores `deploy` outside Swarm). If using a custom compose, add explicit CPU limits (e.g. `cpus: "4"`) to the Ollama service. (7) **"signal: killed" / OOM:** If `ollama run phi3:mini` fails with "llama runner process has terminated: signal: killed", the container ran out of memory. Set Docker Desktop memory (Settings → Resources → Memory) to 6GB minimum; 6GB runs phi3:mini smoothly. For headroom, use 8GB. Low-memory fallback: `LLM_MODEL=llama3.2:1b` (set in backend env, then `ollama pull llama3.2:1b`).
+**LLM 500 error troubleshooting:** If you see "AI summary unavailable" with a 500 from Ollama: (1) Ensure the model is pulled: `docker compose exec ollama ollama pull phi3:mini`. (2) Test locally: `docker compose exec ollama ollama run phi3:mini "Hello"`. (3) Reduce `LLM_MAX_OUTPUT_TOKENS` to 512 if still failing. (4) Check backend logs for the full Ollama error response. (5) Update Ollama: `docker compose pull ollama` and restart. (6) **Cgroup "max" parsing bug:** If Ollama logs show `failed to parse CPU allowed micro secs` with `parsing "max": invalid syntax`, the container's cgroup reports unlimited CPU and Ollama fails to parse it. The project's `docker-compose.yml` sets `deploy.resources.limits` (cpus, memory) and `OLLAMA_NUM_THREAD` to work around this. Run with `docker compose --compatibility up` so these limits are applied (plain `docker compose up` ignores `deploy` outside Swarm). If using a custom compose, add explicit CPU limits (e.g. `cpus: "4"`) to the Ollama service. (7) **"signal: killed" / OOM:** If `ollama run phi3:mini` fails with "llama runner process has terminated: signal: killed", the container ran out of memory. Set Docker Desktop memory (Settings → Resources → Memory) to at least 6GB for phi3:mini. For lower-memory setups, use `LLM_MODEL=llama3.2:1b` (set in backend env, then `ollama pull llama3.2:1b`).
 
 ### Local Development
 
