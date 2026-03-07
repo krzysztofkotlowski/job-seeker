@@ -598,7 +598,7 @@ export function ResumeAnalysisPage() {
       setResult((prev) => (prev ? { ...prev, summary: trimmed } : prev));
       if (!trimmed) {
         setSummaryError(
-          "AI summary unavailable. Ensure Ollama is running and a model is pulled (e.g. ollama pull tinyllama).",
+          "AI summary unavailable. Ensure Ollama is running and a model is pulled (e.g. ollama pull phi3:mini).",
         );
       }
     } catch (e) {

@@ -246,9 +246,11 @@ flowchart LR
 
 ### With Docker (recommended)
 
+**Prerequisites:** Docker Desktop with 6GB memory (Settings → Resources → Memory). phi3:mini runs smoothly at 6GB.
+
 ```bash
-# From project root
-docker compose up --build
+# From project root (--compatibility applies Ollama CPU/memory limits to fix cgroup parsing)
+docker compose --compatibility up --build
 ```
 
 - **Frontend:** http://localhost:5173
@@ -263,10 +265,10 @@ Default DB: `postgresql://jobseeker:jobseeker@postgres:5432/jobseeker` (inside C
 **LLM summary (optional):** After resume analysis, users can click "Generate AI summary" to get AI-generated career advice. The summary streams as the model generates it and is rendered as markdown with clickable job links. Requires Ollama running with a model. The `./scripts/test-and-build.sh` script pulls the model automatically. For manual `docker compose up`, run:
 
 ```bash
-docker compose exec ollama ollama pull tinyllama
+docker compose exec ollama ollama pull phi3:mini
 ```
 
-Default model is `tinyllama`. For better quality: `llama3.2:1b` or `llama3.2:3b`. Set `LLM_MODEL` in backend env if needed. Optional: create a custom model with the project Modelfile for improved prompt adherence:
+Default model is `phi3:mini`. For different quality: `llama3.2:1b`, `llama3.2:3b`, or `qwen3.5:0.8b`. Set `LLM_MODEL` in backend env if needed. Optional: create a custom model with the project Modelfile for improved prompt adherence:
 
 ```bash
 ollama create jobseeker-advisor -f Modelfile
@@ -274,6 +276,8 @@ ollama create jobseeker-advisor -f Modelfile
 ```
 
 **RAG (vector search):** When `RAG_ENABLED=true` and Elasticsearch is running, resume analysis uses semantic search to find additional job matches. After importing jobs, run `POST /api/v1/jobs/sync-embeddings` to index jobs for RAG. Pull the embedding model: `docker compose exec ollama ollama pull nomic-embed-text`.
+
+**LLM 500 error troubleshooting:** If you see "AI summary unavailable" with a 500 from Ollama: (1) Ensure the model is pulled: `docker compose exec ollama ollama pull phi3:mini`. (2) Test locally: `docker compose exec ollama ollama run phi3:mini "Hello"`. (3) Reduce `LLM_MAX_OUTPUT_TOKENS` to 512 if still failing. (4) Check backend logs for the full Ollama error response. (5) Update Ollama: `docker compose pull ollama` and restart. (6) **Cgroup "max" parsing bug:** If Ollama logs show `failed to parse CPU allowed micro secs` with `parsing "max": invalid syntax`, the container's cgroup reports unlimited CPU and Ollama fails to parse it. The project's `docker-compose.yml` sets `deploy.resources.limits` (cpus, memory) and `OLLAMA_NUM_THREAD` to work around this. Run with `docker compose --compatibility up` so these limits are applied (plain `docker compose up` ignores `deploy` outside Swarm). If using a custom compose, add explicit CPU limits (e.g. `cpus: "4"`) to the Ollama service. (7) **"signal: killed" / OOM:** If `ollama run phi3:mini` fails with "llama runner process has terminated: signal: killed", the container ran out of memory. Set Docker Desktop memory (Settings → Resources → Memory) to 6GB minimum; 6GB runs phi3:mini smoothly. For headroom, use 8GB. Low-memory fallback: `LLM_MODEL=llama3.2:1b` (set in backend env, then `ollama pull llama3.2:1b`).
 
 ### Local Development
 
@@ -391,10 +395,10 @@ Copy `.env.example` to `.env` and adjust. See `.env.example` for all variables.
 | `DATABASE_URL`          | PostgreSQL URL (required for backend).                                                                                                   |
 | `ENRICH_ON_IMPORT`      | When set (`1`, `true`, `yes`), NoFluffJobs import fetches each job page for description and nice-to-have skills. Slower but richer data. |
 | `LLM_URL`               | Ollama API URL (e.g. `http://ollama:11434`). If unset, resume summaries are disabled.                                                    |
-| `LLM_MODEL`             | Model name for summarization (default: `tinyllama`). Use `llama3.2:1b`, `phi3:mini`, or `llama3.2:3b` for better quality.                |
+| `LLM_MODEL`             | Model name for summarization (default: `phi3:mini`). Use `llama3.2:1b`, `qwen3.5:0.8b`, or `llama3.2:3b` for different quality.         |
 | `LLM_TIMEOUT`           | Timeout in seconds for LLM requests (default: 30).                                                                                       |
 | `LLM_SUMMARIZE_TIMEOUT` | Timeout for on-demand summarize (default: 90). Increase on small containers.                                                             |
-| `LLM_MAX_OUTPUT_TOKENS` | Max tokens for summary output (default: 5120). Reduces cut-off with small models.                                                        |
+| `LLM_MAX_OUTPUT_TOKENS` | Max tokens for summary output (default: 1024). Lower values help avoid 500 errors on small models or low-memory systems.                  |
 | `ELASTICSEARCH_URL`     | Elasticsearch URL for RAG (default: `http://localhost:9200`).                                                                            |
 | `EMBED_MODEL`           | Ollama embedding model (default: `nomic-embed-text`). Run `ollama pull nomic-embed-text`.                                                |
 | `EMBED_DIMS`            | Embedding dimensions (default: 768 for nomic-embed-text).                                                                                |

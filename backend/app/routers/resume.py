@@ -159,7 +159,7 @@ async def summarize_match(body: ResumeSummarizeRequest = Body(...)):
     if summary is None:
         raise HTTPException(
             503,
-            "AI summary unavailable. Ensure Ollama is running with a model (e.g. ollama pull tinyllama).",
+            "AI summary unavailable. Ensure Ollama is running with a model (e.g. ollama pull phi3:mini).",
         )
     return {"summary": summary}
 

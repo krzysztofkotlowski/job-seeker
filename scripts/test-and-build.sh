@@ -63,33 +63,51 @@ cd "$ROOT"
 
 echo ""
 echo "=== 3. Docker build and up ==="
-docker compose up --build -d
+docker compose --compatibility up --build -d
 
 echo ""
-echo "=== 4. Ollama models (tinyllama + nomic-embed-text only) ==="
-echo "Waiting for Ollama to be ready..."
-for i in {1..60}; do
+echo "=== 4. Ollama: ensure running and models pulled ==="
+echo "Starting Ollama if not already running..."
+docker compose --compatibility up -d ollama 2>/dev/null || true
+echo "Waiting for Ollama API (up to 120s)..."
+OLLAMA_READY=0
+for i in $(seq 1 60); do
   if curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then
+    OLLAMA_READY=1
+    echo "Ollama is ready."
     break
   fi
+  printf "."
   sleep 2
 done
-if curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then
-  echo "Removing unused models (keeping only tinyllama and nomic-embed-text)..."
-  docker compose exec -T ollama ollama list 2>/dev/null | awk 'NR>1 {print $1}' | while IFS= read -r full; do
+echo ""
+if [ "$OLLAMA_READY" -eq 0 ]; then
+  echo "WARNING: Ollama not reachable after 120s. Resume summaries will be disabled."
+  echo "  Start manually: docker compose up -d ollama"
+  echo "  Then pull model: docker compose exec ollama ollama pull phi3:mini"
+else
+  echo "Removing unused models (keeping phi3 and nomic-embed-text)..."
+  for full in $(docker compose exec -T ollama ollama list 2>/dev/null | awk 'NR>1 {print $1}'); do
     base="${full%%:*}"
     case "$base" in
-      tinyllama|nomic-embed-text) ;;
-      *) echo "  Removing $full"; docker compose exec -T ollama ollama rm "$full" 2>/dev/null || true ;;
+      phi3|nomic-embed-text) ;;
+      *)
+        echo "  Removing $full"
+        docker compose exec -T ollama ollama rm "$full" 2>/dev/null || true
+        ;;
     esac
   done
-  echo "Pulling tinyllama (for resume AI summary)..."
-  docker compose exec -T ollama ollama pull tinyllama || true
+  echo "Pulling phi3:mini (for resume AI summary)..."
+  if ! docker compose exec -T ollama ollama pull phi3:mini; then
+    echo "ERROR: Failed to pull phi3:mini. Resume summaries will not work."
+    exit 1
+  fi
   echo "Pulling nomic-embed-text (for RAG)..."
-  docker compose exec -T ollama ollama pull nomic-embed-text || true
-  echo "Models ready."
-else
-  echo "Ollama not reachable; resume summaries will be disabled. Run: docker compose exec ollama ollama pull tinyllama"
+  if ! docker compose exec -T ollama ollama pull nomic-embed-text; then
+    echo "ERROR: Failed to pull nomic-embed-text. RAG semantic search will not work."
+    exit 1
+  fi
+  echo "Ollama models ready."
 fi
 
 echo ""
@@ -98,6 +116,11 @@ if curl -sf http://localhost:9200/_cluster/health >/dev/null 2>&1; then
   echo "Elasticsearch: OK"
 else
   echo "Elasticsearch: not reachable"
+fi
+if curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then
+  echo "Ollama: OK"
+else
+  echo "Ollama: not reachable"
 fi
 if curl -sf http://localhost:8000/api/v1/health >/dev/null 2>&1; then
   echo "Backend: OK"

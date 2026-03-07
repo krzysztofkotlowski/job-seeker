@@ -3,12 +3,12 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services.llm_service import LLMConfig, get_llm_config, summarize_resume_match
+from app.services.llm_service import DEFAULT_LLM_MODEL, LLMConfig, get_llm_config, summarize_resume_match
 
 
 def test_summarize_resume_match_returns_none_when_disabled():
     """When LLM is disabled (no URL), return None."""
-    empty_cfg = LLMConfig(url="", model="tinyllama", timeout=30, summarize_timeout=90, max_output_tokens=512)
+    empty_cfg = LLMConfig(url="", model=DEFAULT_LLM_MODEL, timeout=30, summarize_timeout=90, max_output_tokens=512)
     with patch("app.services.llm_service.get_llm_config", return_value=empty_cfg):
         result = asyncio.run(summarize_resume_match(["Python"], [], []))
     assert result is None
@@ -31,7 +31,7 @@ def test_summarize_resume_match_returns_summary_when_llm_responds():
     mock_client.__aenter__ = AsyncMock(return_value=mock_client)
     mock_client.__aexit__ = AsyncMock(return_value=None)
 
-    cfg = LLMConfig(url="http://ollama:11434", model="tinyllama", timeout=30, summarize_timeout=90, max_output_tokens=512)
+    cfg = LLMConfig(url="http://ollama:11434", model=DEFAULT_LLM_MODEL, timeout=30, summarize_timeout=90, max_output_tokens=512)
     with (
         patch("app.services.llm_service.get_llm_config", return_value=cfg),
         patch("app.services.llm_service.httpx.AsyncClient", return_value=mock_client),

@@ -22,6 +22,8 @@ _INJECTION_PATTERNS = (
 )
 _INJECTION_RE = re.compile("|".join(f"({p})" for p in _INJECTION_PATTERNS), re.IGNORECASE)
 
+DEFAULT_LLM_MODEL = "phi3:mini"
+
 
 @dataclass
 class LLMConfig:
@@ -36,10 +38,10 @@ class LLMConfig:
     @classmethod
     def from_env(cls) -> "LLMConfig":
         url = (os.environ.get("LLM_URL", "") or "").rstrip("/")
-        model = os.environ.get("LLM_MODEL", "tinyllama") or "tinyllama"
+        model = os.environ.get("LLM_MODEL", DEFAULT_LLM_MODEL) or DEFAULT_LLM_MODEL
         timeout = int(os.environ.get("LLM_TIMEOUT", "30") or "30")
         summarize_timeout = int(os.environ.get("LLM_SUMMARIZE_TIMEOUT", "90") or "90")
-        max_output_tokens = int(os.environ.get("LLM_MAX_OUTPUT_TOKENS", "5120") or "5120")
+        max_output_tokens = int(os.environ.get("LLM_MAX_OUTPUT_TOKENS", "1024") or "1024")
         return cls(
             url=url,
             model=model,
@@ -343,7 +345,17 @@ async def _chat(
         log.warning("LLM request timed out after %ds", effective_timeout)
         return None
     except httpx.HTTPStatusError as e:
-        log.warning("LLM API error: %s", e)
+        err_body = ""
+        if hasattr(e, "response") and e.response is not None:
+            try:
+                err_body = e.response.text[:500] if e.response.text else ""
+            except Exception:
+                pass
+        log.warning(
+            "LLM API error: %s%s",
+            e,
+            f" | Ollama response: {err_body}" if err_body else "",
+        )
         return None
     except Exception as e:
         log.warning("LLM request failed: %s", e)
