@@ -12,6 +12,7 @@ import type {
   ResumeRecommendation,
   OllamaModel,
   AIConfig,
+  AIConfigUpdate,
   AIMetrics,
 } from "./types";
 import { getTokenForRequest } from "../auth/tokenProvider";
@@ -27,11 +28,22 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const res = await fetch(`${BASE}${path}`, { ...init, headers });
   if (!res.ok) {
     const body = await res.json().catch(() => ({}));
-    const err =
-      body?.error?.message ||
-      body?.detail?.message ||
-      body?.detail ||
-      `HTTP ${res.status}`;
+    let err: string;
+    if (body?.error?.message) {
+      err = body.error.message;
+    } else if (Array.isArray(body?.detail)) {
+      err =
+        body.detail
+          .map((d: { msg?: string }) => d?.msg)
+          .filter(Boolean)
+          .join("; ") || `HTTP ${res.status}`;
+    } else if (typeof body?.detail === "string") {
+      err = body.detail;
+    } else if (body?.detail?.message) {
+      err = body.detail.message;
+    } else {
+      err = `HTTP ${res.status}`;
+    }
     throw new Error(err);
   }
   if (res.status === 204) return undefined as T;
@@ -341,10 +353,17 @@ export const api = {
   aiGetConfig: () => request<AIConfig>("/ai/config"),
 
   /** Update AI config. */
-  aiUpdateConfig: (config: Partial<AIConfig>) =>
+  aiUpdateConfig: (config: AIConfigUpdate) =>
     request<AIConfig>("/ai/config", {
       method: "PUT",
       body: JSON.stringify(config),
+    }),
+
+  /** Validate OpenAI API key before saving. */
+  aiValidateOpenAIKey: (openai_api_key: string) =>
+    request<{ valid: boolean; error?: string }>("/ai/config/validate-key", {
+      method: "POST",
+      body: JSON.stringify({ openai_api_key }),
     }),
 
   /** Get AI inference metrics. */
@@ -433,9 +452,13 @@ export const api = {
           try {
             const parsed = JSON.parse(line.slice(6)) as {
               chunk?: string;
+              error?: string;
               done?: boolean;
               recommendations?: ResumeRecommendation[];
             };
+            if (parsed.error) {
+              throw new Error(parsed.error);
+            }
             if (typeof parsed.chunk === "string") {
               full += parsed.chunk;
               onChunk(parsed.chunk);

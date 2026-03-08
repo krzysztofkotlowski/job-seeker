@@ -206,11 +206,24 @@ export interface OllamaModel {
   };
 }
 
+export type AIProvider = "ollama" | "openai";
+export type AIEmbedSource = "ollama" | "openai";
+
 export interface AIConfig {
+  provider: AIProvider;
+  openai_llm_model: string;
+  embed_source: AIEmbedSource;
+  api_key_set: boolean;
   llm_model: string;
   embed_model: string;
   temperature: number;
   max_output_tokens: number;
+  embed_dims?: number;
+}
+
+/** Payload for updating AI config. Includes openai_api_key for setting the key. */
+export interface AIConfigUpdate extends Partial<AIConfig> {
+  openai_api_key?: string;
 }
 
 export interface AIMetrics {

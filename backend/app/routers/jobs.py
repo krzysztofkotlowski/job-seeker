@@ -183,7 +183,8 @@ def sync_embeddings(db: Session = Depends(get_db)):
         )
     ai_cfg = get_ai_config(db)
     rows = db.query(JobRow).all()
-    indexed = bulk_index_jobs(rows, embed_model=ai_cfg["embed_model"])
+    embed_model = ai_cfg["embed_model"] if ai_cfg.get("embed_source") != "openai" else None
+    indexed = bulk_index_jobs(rows, embed_model=embed_model, ai_config=ai_cfg)
     return {"indexed": indexed, "total": len(rows)}
 
 
@@ -194,8 +195,8 @@ def embedding_status(db: Session = Depends(get_db)):
     """
     try:
         from app.services.elasticsearch_service import (
-            JOBS_INDEX,
             _get_client,
+            _index_for_dims,
             is_available,
             is_sync_in_progress,
             ensure_index,
@@ -206,10 +207,13 @@ def embedding_status(db: Session = Depends(get_db)):
         return {"available": False, "indexed": 0, "total": 0, "syncing": False}
     try:
         client = _get_client()
-        if not client or not ensure_index(client):
+        ai_cfg = get_ai_config(db)
+        embed_dims = ai_cfg.get("embed_dims")
+        if not client or not ensure_index(client, embed_dims=embed_dims):
             return {"available": True, "indexed": 0, "total": 0, "syncing": is_sync_in_progress()}
         total = db.query(JobRow).count()
-        count_resp = client.count(index=JOBS_INDEX)
+        index_name = _index_for_dims(embed_dims)
+        count_resp = client.count(index=index_name)
         indexed = count_resp.get("count", 0)
         return {"available": True, "indexed": indexed, "total": total, "syncing": is_sync_in_progress()}
     except Exception:
@@ -217,7 +221,7 @@ def embedding_status(db: Session = Depends(get_db)):
 
 
 @router.delete("/embedding-index")
-def clear_embedding_index():
+def clear_embedding_index(db: Session = Depends(get_db)):
     """Clear the Elasticsearch jobs index. Use before full re-index."""
     try:
         from app.services.elasticsearch_service import clear_index, is_available, is_sync_in_progress
@@ -239,7 +243,8 @@ def clear_embedding_index():
             "Embedding sync is already running. Please wait for it to complete.",
             status_code=409,
         )
-    ok = clear_index()
+    ai_cfg = get_ai_config(db)
+    ok = clear_index(embed_dims=ai_cfg.get("embed_dims"))
     if not ok:
         raise api_error("CLEAR_FAILED", "Failed to clear embedding index", status_code=500)
     return {"cleared": True}
@@ -285,14 +290,15 @@ def sync_embeddings_stream(
             status_code=409,
         )
     ai_cfg = get_ai_config(db)
+    embed_dims = ai_cfg.get("embed_dims")
     rows = db.query(JobRow).all()
 
     if mode == "full":
-        if not clear_index():
+        if not clear_index(embed_dims=embed_dims):
             raise api_error("CLEAR_FAILED", "Failed to clear embedding index", status_code=500)
         jobs_to_index = rows
     else:
-        jobs_to_index = get_jobs_not_indexed(rows)
+        jobs_to_index = get_jobs_not_indexed(rows, embed_dims=embed_dims)
         if not jobs_to_index:
             async def empty_stream():
                 yield f"data: {json.dumps({'done': True, 'indexed': 0, 'total': 0})}\n\n"
@@ -303,8 +309,14 @@ def sync_embeddings_stream(
                 headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
             )
 
+    embed_model = ai_cfg["embed_model"] if ai_cfg.get("embed_source") != "openai" else None
+
     async def stream_gen_async():
-        for event in bulk_index_jobs_stream(jobs_to_index, embed_model=ai_cfg["embed_model"]):
+        for event in bulk_index_jobs_stream(
+            jobs_to_index,
+            embed_model=embed_model,
+            ai_config=ai_cfg,
+        ):
             yield f"data: {json.dumps(event)}\n\n"
             await asyncio.sleep(0)  # Force flush to client
 

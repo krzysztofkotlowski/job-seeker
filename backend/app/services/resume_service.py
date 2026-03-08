@@ -148,6 +148,7 @@ def retrieve_semantic_matches(
     extracted_skills: set[str],
     top_k: int = 10,
     embed_model: str | None = None,
+    ai_config: dict | None = None,
 ) -> list[dict]:
     """
     RAG: embed resume skills, kNN search in Elasticsearch, return matches with full job dict.
@@ -164,10 +165,11 @@ def retrieve_semantic_matches(
     query_text = " ".join(sorted(extracted_skills)) if extracted_skills else ""
     if not query_text.strip():
         return []
-    embedding = embed_text(query_text, model=embed_model)
+    embedding = embed_text(query_text, model=embed_model, ai_config=ai_config)
     if not embedding:
         return []
-    hits = search_similar(query_embedding=embedding, top_k=top_k)
+    embed_dims = (ai_config or {}).get("embed_dims")
+    hits = search_similar(query_embedding=embedding, top_k=top_k, embed_dims=embed_dims)
     if not hits:
         return []
     results = []
@@ -196,6 +198,7 @@ def retrieve_hybrid_recommendations(
     extracted_skills: set[str],
     top_k: int = 10,
     embed_model: str | None = None,
+    ai_config: dict | None = None,
 ) -> list[dict]:
     """
     RAG: hybrid search (vector + keyword) in Elasticsearch, return job recommendations with URLs from DB.
@@ -212,10 +215,16 @@ def retrieve_hybrid_recommendations(
     query_text = " ".join(sorted(extracted_skills)) if extracted_skills else ""
     if not query_text.strip():
         return []
-    embedding = embed_text(query_text, model=embed_model)
+    embedding = embed_text(query_text, model=embed_model, ai_config=ai_config)
     if not embedding:
         return []
-    hits = search_hybrid(query_text=query_text, query_embedding=embedding, top_k=top_k)
+    embed_dims = (ai_config or {}).get("embed_dims")
+    hits = search_hybrid(
+        query_text=query_text,
+        query_embedding=embedding,
+        top_k=top_k,
+        embed_dims=embed_dims,
+    )
     if not hits:
         return []
     results = []

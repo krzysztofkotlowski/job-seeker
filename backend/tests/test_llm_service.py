@@ -49,3 +49,39 @@ def test_summarize_resume_match_returns_summary_when_llm_responds():
 
     assert summary == "Your skills align well with Backend roles."
     assert eval_count == 42
+
+
+def test_summarize_resume_match_openai_provider():
+    """When ai_config has provider=openai, uses OpenAI API."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {
+        "choices": [{"message": {"content": "## Your strongest fields\n\nBackend: strong."}}],
+        "usage": {"total_tokens": 50},
+    }
+
+    mock_client = MagicMock()
+    mock_client.post = AsyncMock(return_value=mock_resp)
+    mock_client.__aenter__ = AsyncMock(return_value=mock_client)
+    mock_client.__aexit__ = AsyncMock(return_value=None)
+
+    ai_config = {
+        "provider": "openai",
+        "openai_api_key": "sk-test",
+        "openai_llm_model": "gpt-4o-mini",
+        "max_output_tokens": 1024,
+        "temperature": 0.3,
+    }
+    with patch("app.services.llm_service.httpx.AsyncClient", return_value=mock_client):
+        summary, eval_count = asyncio.run(
+            summarize_resume_match(
+                ["Python"],
+                [],
+                [{"category": "Backend", "match_score": 80, "matching_skills": [], "skills_to_add": []}],
+                ai_config=ai_config,
+            )
+        )
+    assert summary is not None
+    assert "strongest" in summary or "Backend" in summary
+    assert eval_count == 50

@@ -134,10 +134,15 @@ class AIConfigRow(Base):
     __tablename__ = "ai_config"
 
     id = Column(Integer, primary_key=True, autoincrement=True)
+    provider = Column(String(20), nullable=False, default="ollama")
+    openai_api_key = Column(String(500), nullable=True)
+    openai_llm_model = Column(String(100), nullable=False, default="gpt-4o-mini")
+    embed_source = Column(String(20), nullable=False, default="ollama")
     llm_model = Column(String(255), nullable=False, default="phi3:mini")
     embed_model = Column(String(255), nullable=False, default="nomic-embed-text")
     temperature = Column(Float, nullable=False, default=0.3)
     max_output_tokens = Column(Integer, nullable=False, default=1024)
+    embed_dims = Column(Integer, nullable=True)
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
 

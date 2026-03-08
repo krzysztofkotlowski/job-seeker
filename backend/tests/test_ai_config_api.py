@@ -5,6 +5,8 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
+from app.services.ai_config_service import list_openai_models, validate_openai_key
+
 
 def test_ai_list_models_returns_empty_when_ollama_unavailable(client: TestClient):
     """When Ollama is not configured, /ai/models returns empty list."""
@@ -15,7 +17,7 @@ def test_ai_list_models_returns_empty_when_ollama_unavailable(client: TestClient
 
 
 def test_ai_get_config_returns_defaults(client: TestClient):
-    """GET /ai/config returns config from DB or env defaults."""
+    """GET /ai/config returns config from DB or env defaults. Never returns api_key."""
     r = client.get("/api/v1/ai/config")
     assert r.status_code == 200
     data = r.json()
@@ -23,6 +25,9 @@ def test_ai_get_config_returns_defaults(client: TestClient):
     assert "embed_model" in data
     assert "temperature" in data
     assert "max_output_tokens" in data
+    assert "provider" in data
+    assert "api_key_set" in data
+    assert "openai_api_key" not in data
 
 
 def test_ai_put_config_updates(client: TestClient):
@@ -37,6 +42,26 @@ def test_ai_put_config_updates(client: TestClient):
     assert data["temperature"] == 0.5
 
 
+def test_ai_put_config_openai_provider(client: TestClient):
+    """PUT /ai/config can set provider=openai and openai_llm_model."""
+    r = client.put(
+        "/api/v1/ai/config",
+        json={
+            "provider": "openai",
+            "openai_api_key": "sk-test-key",
+            "openai_llm_model": "gpt-4o-mini",
+            "embed_source": "openai",
+        },
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["provider"] == "openai"
+    assert data["openai_llm_model"] == "gpt-4o-mini"
+    assert data["embed_source"] == "openai"
+    assert data["api_key_set"] is True
+    assert "openai_api_key" not in data
+
+
 def test_ai_metrics_returns_structure(client: TestClient):
     """GET /ai/metrics returns metrics structure."""
     r = client.get("/api/v1/ai/metrics")
@@ -46,3 +71,86 @@ def test_ai_metrics_returns_structure(client: TestClient):
     assert "avg_latency_ms" in data
     assert "by_model" in data
     assert "last_7_days" in data
+
+
+def test_list_openai_models_returns_static_list():
+    """list_openai_models returns static list of OpenAI models."""
+    result = list_openai_models()
+    assert "models" in result
+    assert len(result["models"]) > 0
+    assert any(m["name"] == "gpt-4o-mini" for m in result["models"])
+
+
+def test_validate_openai_key_returns_false_when_empty():
+    """validate_openai_key returns False for empty key."""
+    assert validate_openai_key("") is False
+    assert validate_openai_key("   ") is False
+
+
+def test_ai_models_returns_openai_when_provider_openai(client: TestClient):
+    """GET /ai/models returns OpenAI models when provider is openai."""
+    r = client.put(
+        "/api/v1/ai/config",
+        json={"provider": "openai", "openai_api_key": "sk-test"},
+    )
+    assert r.status_code == 200
+    r = client.get("/api/v1/ai/models")
+    assert r.status_code == 200
+    data = r.json()
+    assert "models" in data
+    assert any("gpt" in str(m.get("name", "")).lower() for m in data["models"])
+
+
+def test_ai_put_config_openai_partial_update(client: TestClient):
+    """PUT with provider=openai omitting llm_model and embed_model succeeds (partial update)."""
+    r = client.put(
+        "/api/v1/ai/config",
+        json={
+            "provider": "openai",
+            "openai_api_key": "sk-test-key",
+            "openai_llm_model": "gpt-4o-mini",
+            "embed_source": "openai",
+        },
+    )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["provider"] == "openai"
+    assert data["openai_llm_model"] == "gpt-4o-mini"
+    assert "llm_model" in data
+    assert "embed_model" in data
+
+
+def test_ai_put_config_validation_error_empty_llm_model(client: TestClient):
+    """PUT with empty llm_model returns 422 validation error."""
+    r = client.put(
+        "/api/v1/ai/config",
+        json={"llm_model": ""},
+    )
+    assert r.status_code == 422
+    data = r.json()
+    assert "detail" in data
+
+
+def test_ai_validate_key_valid(client: TestClient):
+    """POST /ai/config/validate-key returns valid when key works."""
+    with patch("app.routers.ai_config.validate_openai_key", return_value=True):
+        r = client.post(
+            "/api/v1/ai/config/validate-key",
+            json={"openai_api_key": "sk-valid-key"},
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["valid"] is True
+
+
+def test_ai_validate_key_invalid(client: TestClient):
+    """POST /ai/config/validate-key returns valid=false when key fails."""
+    with patch("app.routers.ai_config.validate_openai_key", return_value=False):
+        r = client.post(
+            "/api/v1/ai/config/validate-key",
+            json={"openai_api_key": "sk-invalid"},
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["valid"] is False
+    assert "error" in data

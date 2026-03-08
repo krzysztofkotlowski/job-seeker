@@ -54,7 +54,7 @@ def _maybe_sync_embeddings_on_startup():
     """If Elasticsearch and embedding service are available, sync jobs for RAG in background."""
     try:
         from app.services.elasticsearch_service import (
-            JOBS_INDEX,
+            _index_for_dims,
             bulk_index_jobs,
             is_available,
             ensure_index,
@@ -70,17 +70,20 @@ def _maybe_sync_embeddings_on_startup():
         if not embed_is_available():
             log.debug("Startup embedding sync skipped: Ollama/embedding model not ready")
             return
-        client = _get_client()
-        if not client or not ensure_index(client):
-            return
-        if client.count(index=JOBS_INDEX).get("count", 0) > 0:
-            return
         db = SessionLocal()
         try:
             ai_cfg = get_ai_config(db)
+            embed_dims = ai_cfg.get("embed_dims")
+            client = _get_client()
+            if not client or not ensure_index(client, embed_dims=embed_dims):
+                return
+            index_name = _index_for_dims(embed_dims)
+            if client.count(index=index_name).get("count", 0) > 0:
+                return
             rows = db.query(JobRow).all()
             if rows:
-                indexed = bulk_index_jobs(rows, embed_model=ai_cfg["embed_model"])
+                embed_model = ai_cfg["embed_model"] if ai_cfg.get("embed_source") != "openai" else None
+                indexed = bulk_index_jobs(rows, embed_model=embed_model, ai_config=ai_cfg)
                 log.info("Startup: synced %d jobs to Elasticsearch for RAG", indexed)
         finally:
             db.close()
@@ -129,6 +132,8 @@ if resume_router is not None:
 @app.get("/api/v1/health")
 async def health():
     from app.services.llm_service import check_ollama_health, get_llm_config
+    from app.services.ai_config_service import get_ai_config
+    from app.database import SessionLocal
 
     status: dict = {"status": "ok"}
     try:
@@ -141,10 +146,21 @@ async def health():
         status["elasticsearch_available"] = es_available()
     except ImportError:
         status["elasticsearch_available"] = False
-    cfg = get_llm_config()
-    if cfg.url:
-        status["llm_available"] = await check_ollama_health()
-    else:
+    try:
+        db = SessionLocal()
+        try:
+            ai_cfg = get_ai_config(db)
+            if ai_cfg.get("provider") == "openai":
+                status["llm_available"] = bool(ai_cfg.get("api_key_set"))
+            else:
+                cfg = get_llm_config()
+                if cfg.url:
+                    status["llm_available"] = await check_ollama_health()
+                else:
+                    status["llm_available"] = False
+        finally:
+            db.close()
+    except Exception:
         status["llm_available"] = False
     return status
 

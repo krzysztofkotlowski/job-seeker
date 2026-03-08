@@ -1,4 +1,4 @@
-"""Embedding service: generate vectors via Ollama /api/embed for RAG."""
+"""Embedding service: generate vectors via Ollama or OpenAI for RAG."""
 
 import logging
 import os
@@ -11,8 +11,62 @@ EMBED_URL = os.environ.get("LLM_URL", "").rstrip("/")
 EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text")
 EMBED_TIMEOUT = int(os.environ.get("EMBED_TIMEOUT", "120"))
 
-# nomic-embed-text: 768 dims; all-minilm: 384 dims
+# nomic-embed-text: 768 dims; text-embedding-3-small: 1536 dims
 EMBED_DIMS = int(os.environ.get("EMBED_DIMS", "768"))
+OPENAI_EMBED_MODEL = "text-embedding-3-small"
+OPENAI_EMBED_DIMS = 1536
+
+
+def embed_text_openai(text: str, model: str | None = None, api_key: str | None = None) -> list[float] | None:
+    """Embed text via OpenAI API. Returns None if unavailable or error."""
+    if not api_key or not str(api_key).strip() or not text or not str(text).strip():
+        return None
+    effective_model = (model or "").strip() or OPENAI_EMBED_MODEL
+    url = "https://api.openai.com/v1/embeddings"
+    headers = {"Authorization": f"Bearer {api_key.strip()}", "Content-Type": "application/json"}
+    payload = {"model": effective_model, "input": str(text).strip()[:8000]}
+    try:
+        with httpx.Client(timeout=EMBED_TIMEOUT) as client:
+            resp = client.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            items = data.get("data") or []
+            if items:
+                return items[0].get("embedding")
+    except httpx.TimeoutException:
+        log.warning("OpenAI embedding timed out")
+    except httpx.HTTPStatusError as e:
+        log.warning("OpenAI embedding API error: %s", e)
+    except Exception as e:
+        log.warning("OpenAI embedding failed: %s", e)
+    return None
+
+
+def embed_batch_openai(texts: list[str], model: str | None = None, api_key: str | None = None) -> list[list[float]]:
+    """Embed multiple texts via OpenAI API."""
+    if not api_key or not str(api_key).strip() or not texts:
+        return []
+    cleaned = [str(t).strip()[:8000] for t in texts if t and str(t).strip()]
+    if not cleaned:
+        return []
+    effective_model = (model or "").strip() or OPENAI_EMBED_MODEL
+    url = "https://api.openai.com/v1/embeddings"
+    headers = {"Authorization": f"Bearer {api_key.strip()}", "Content-Type": "application/json"}
+    payload = {"model": effective_model, "input": cleaned}
+    try:
+        with httpx.Client(timeout=EMBED_TIMEOUT) as client:
+            resp = client.post(url, json=payload, headers=headers)
+            resp.raise_for_status()
+            data = resp.json()
+            items = sorted((data.get("data") or []), key=lambda x: x.get("index", 0))
+            return [item.get("embedding", []) for item in items[: len(cleaned)]]
+    except httpx.TimeoutException:
+        log.warning("OpenAI batch embedding timed out")
+    except httpx.HTTPStatusError as e:
+        log.warning("OpenAI batch embedding API error: %s", e)
+    except Exception as e:
+        log.warning("OpenAI batch embedding failed: %s", e)
+    return []
 
 
 def is_available() -> bool:
@@ -30,11 +84,21 @@ def is_available() -> bool:
     return False
 
 
-def embed_text(text: str, model: str | None = None) -> list[float] | None:
+def embed_text(
+    text: str,
+    model: str | None = None,
+    ai_config: dict | None = None,
+) -> list[float] | None:
     """
     Embed a single text string. Returns None if service unavailable or error.
-    model overrides EMBED_MODEL when provided.
+    When ai_config has embed_source=openai, uses OpenAI API.
     """
+    if ai_config and ai_config.get("embed_source") == "openai" and ai_config.get("openai_api_key"):
+        return embed_text_openai(
+            text,
+            model=(model or "").strip() or OPENAI_EMBED_MODEL,
+            api_key=ai_config["openai_api_key"],
+        )
     if not EMBED_URL or not text or not str(text).strip():
         return None
     effective_model = (model or "").strip() or EMBED_MODEL
@@ -57,12 +121,21 @@ def embed_text(text: str, model: str | None = None) -> list[float] | None:
     return None
 
 
-def embed_batch(texts: list[str], model: str | None = None) -> list[list[float]]:
+def embed_batch(
+    texts: list[str],
+    model: str | None = None,
+    ai_config: dict | None = None,
+) -> list[list[float]]:
     """
-    Embed multiple texts in one request. Returns list of vectors (or None for failed items).
-    Ollama accepts array input for batch embedding.
-    model overrides EMBED_MODEL when provided.
+    Embed multiple texts. Returns list of vectors.
+    When ai_config has embed_source=openai, uses OpenAI API.
     """
+    if ai_config and ai_config.get("embed_source") == "openai" and ai_config.get("openai_api_key"):
+        return embed_batch_openai(
+            texts,
+            model=(model or "").strip() or OPENAI_EMBED_MODEL,
+            api_key=ai_config["openai_api_key"],
+        )
     if not EMBED_URL or not texts:
         return []
     cleaned = [str(t).strip()[:8000] for t in texts if t and str(t).strip()]

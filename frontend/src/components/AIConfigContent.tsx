@@ -5,20 +5,50 @@ import Typography from "@mui/material/Typography";
 import Button from "@mui/material/Button";
 import Slider from "@mui/material/Slider";
 import FormControl from "@mui/material/FormControl";
+import FormControlLabel from "@mui/material/FormControlLabel";
 import InputLabel from "@mui/material/InputLabel";
 import Select from "@mui/material/Select";
 import MenuItem from "@mui/material/MenuItem";
+import TextField from "@mui/material/TextField";
+import ToggleButton from "@mui/material/ToggleButton";
+import ToggleButtonGroup from "@mui/material/ToggleButtonGroup";
+import Radio from "@mui/material/Radio";
+import RadioGroup from "@mui/material/RadioGroup";
 import type { SelectChangeEvent } from "@mui/material/Select";
 import Alert from "@mui/material/Alert";
 import Chip from "@mui/material/Chip";
 import { LoadingSpinner } from "./LoadingSpinner";
 import { api } from "../api/client";
-import type { AIConfig, OllamaModel, AIMetrics } from "../api/types";
+import type {
+  AIConfig,
+  AIConfigUpdate,
+  AIProvider,
+  AIEmbedSource,
+  OllamaModel,
+  AIMetrics,
+} from "../api/types";
 import { useToast } from "../contexts/useToast";
 
 const TINY_MODELS = [{ label: "TinyLlama", value: "tinyllama" }];
 
 const EMBED_FAMILIES = ["nomic", "all-minilm", "mxbai", "bge"];
+
+// Chat completion models (March 2026) — frontier first, then legacy
+const OPENAI_LLM_MODELS = [
+  "gpt-5.4",
+  "gpt-5.4-pro",
+  "gpt-5-mini",
+  "gpt-5-nano",
+  "gpt-5",
+  "gpt-4.1",
+  "gpt-4.1-mini",
+  "gpt-4.1-nano",
+  "gpt-4o",
+  "gpt-4o-mini",
+  "gpt-4-turbo",
+  "gpt-4",
+  "gpt-3.5-turbo",
+];
 
 function isEmbeddingModel(m: OllamaModel): boolean {
   const name = (m.name || m.model || "").toLowerCase();
@@ -32,8 +62,13 @@ export function AIConfigContent() {
   const [metrics, setMetrics] = useState<AIMetrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [validating, setValidating] = useState(false);
   const [llmAvailable, setLlmAvailable] = useState<boolean | null>(null);
 
+  const [provider, setProvider] = useState<AIProvider>("ollama");
+  const [openaiApiKey, setOpenaiApiKey] = useState("");
+  const [openaiLlmModel, setOpenaiLlmModel] = useState("gpt-4o-mini");
+  const [embedSource, setEmbedSource] = useState<AIEmbedSource>("ollama");
   const [llmModel, setLlmModel] = useState("");
   const [embedModel, setEmbedModel] = useState("");
   const [temperature, setTemperature] = useState(0.3);
@@ -53,6 +88,9 @@ export function AIConfigContent() {
       .then(([modelsRes, cfg]) => {
         setModels(modelsRes.models || []);
         setConfig(cfg);
+        setProvider((cfg.provider as AIProvider) || "ollama");
+        setOpenaiLlmModel(cfg.openai_llm_model || "gpt-4o-mini");
+        setEmbedSource((cfg.embed_source as AIEmbedSource) || "ollama");
         setLlmModel(cfg.llm_model);
         setEmbedModel(cfg.embed_model);
         setTemperature(cfg.temperature);
@@ -75,15 +113,23 @@ export function AIConfigContent() {
 
   const handleSave = () => {
     setSaving(true);
+    const payload: AIConfigUpdate = {
+      provider,
+      openai_llm_model: openaiLlmModel,
+      embed_source: embedSource,
+      temperature,
+      max_output_tokens: maxOutputTokens,
+    };
+    if (llmModel?.trim()) payload.llm_model = llmModel.trim();
+    if (embedModel?.trim()) payload.embed_model = embedModel.trim();
+    if (provider === "openai" && openaiApiKey.trim()) {
+      payload.openai_api_key = openaiApiKey.trim();
+    }
     api
-      .aiUpdateConfig({
-        llm_model: llmModel,
-        embed_model: embedModel,
-        temperature,
-        max_output_tokens: maxOutputTokens,
-      })
+      .aiUpdateConfig(payload)
       .then((updated) => {
         setConfig(updated);
+        setOpenaiApiKey("");
         toast.showSuccess("AI config saved");
       })
       .catch((e) =>
@@ -94,13 +140,22 @@ export function AIConfigContent() {
 
   const handleReset = () => {
     if (config) {
+      setProvider((config.provider as AIProvider) || "ollama");
+      setOpenaiLlmModel(config.openai_llm_model || "gpt-4o-mini");
+      setEmbedSource((config.embed_source as AIEmbedSource) || "ollama");
       setLlmModel(config.llm_model);
       setEmbedModel(config.embed_model);
       setTemperature(config.temperature);
       setMaxOutputTokens(config.max_output_tokens);
+      setOpenaiApiKey("");
       toast.showSuccess("Reset to saved config");
     }
   };
+
+  const canSave =
+    provider === "ollama" ||
+    config?.api_key_set === true ||
+    (provider === "openai" && openaiApiKey.trim().length > 0);
 
   const llmModels = models.filter((m) => !isEmbeddingModel(m));
   let embedModels = models.filter((m) => isEmbeddingModel(m));
@@ -128,91 +183,207 @@ export function AIConfigContent() {
 
   const formContent = (
     <>
-      {llmAvailable === false && (
-        <Alert severity="warning">
-          Ollama is not available. Start Ollama and pull a model (e.g. ollama
-          pull phi3:mini) to use AI summaries.
-        </Alert>
-      )}
-
       <Paper sx={{ p: 3 }}>
         <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 2 }}>
-          Model selection
+          AI provider
         </Typography>
-        <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
-          <FormControl fullWidth size="small">
-            <InputLabel>LLM model</InputLabel>
-            <Select
-              value={llmModel}
-              label="LLM model"
-              onChange={(e: SelectChangeEvent) => setLlmModel(e.target.value)}
-            >
-              {llmModels.map((m) => (
-                <MenuItem key={m.name} value={m.name}>
-                  {m.name}
-                  {m.details?.parameter_size && (
-                    <Typography
-                      component="span"
-                      variant="caption"
-                      sx={{ ml: 1, opacity: 0.7 }}
-                    >
-                      ({m.details.parameter_size})
-                    </Typography>
-                  )}
-                </MenuItem>
-              ))}
-              {llmModels.length === 0 && (
-                <MenuItem value={llmModel} disabled>
-                  {llmModel ||
-                    "No models — pull one with ollama pull phi3:mini"}
-                </MenuItem>
-              )}
-            </Select>
-          </FormControl>
-
-          <Box
-            sx={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 1,
-              alignItems: "center",
-            }}
-          >
-            <Typography variant="body2" color="text.secondary">
-              Tiny model preset:
-            </Typography>
-            {TINY_MODELS.map((p) => (
-              <Chip
-                key={p.value}
-                label={p.label}
-                onClick={() => setLlmModel(p.value)}
-                variant={llmModel === p.value ? "filled" : "outlined"}
-                size="small"
-              />
-            ))}
-          </Box>
-
-          <FormControl fullWidth size="small">
-            <InputLabel>Embedding model (RAG)</InputLabel>
-            <Select
-              value={embedSelectValue}
-              label="Embedding model (RAG)"
-              onChange={(e: SelectChangeEvent) => setEmbedModel(e.target.value)}
-            >
-              {embedOptions.map((m) => (
-                <MenuItem key={m.name} value={m.name}>
-                  {m.name}
-                </MenuItem>
-              ))}
-              {embedOptions.length === 0 && (
-                <MenuItem value={embedModel} disabled>
-                  {embedModel || "No embedding models"}
-                </MenuItem>
-              )}
-            </Select>
-          </FormControl>
-        </Box>
+        <ToggleButtonGroup
+          value={provider}
+          exclusive
+          onChange={(_, v) => v && setProvider(v as AIProvider)}
+          size="small"
+        >
+          <ToggleButton value="ollama">Self-hosted (Ollama)</ToggleButton>
+          <ToggleButton value="openai">OpenAI API</ToggleButton>
+        </ToggleButtonGroup>
       </Paper>
+
+      {provider === "ollama" && (
+        <>
+          {llmAvailable === false && (
+            <Alert severity="warning">
+              Ollama is not available. Start Ollama and pull a model (e.g.
+              ollama pull phi3:mini) to use AI summaries.
+            </Alert>
+          )}
+
+          <Paper sx={{ p: 3 }}>
+            <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 2 }}>
+              Model selection
+            </Typography>
+            <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              <FormControl fullWidth size="small">
+                <InputLabel>LLM model</InputLabel>
+                <Select
+                  value={llmModel}
+                  label="LLM model"
+                  onChange={(e: SelectChangeEvent) =>
+                    setLlmModel(e.target.value)
+                  }
+                >
+                  {llmModels.map((m) => (
+                    <MenuItem key={m.name} value={m.name}>
+                      {m.name}
+                      {m.details?.parameter_size && (
+                        <Typography
+                          component="span"
+                          variant="caption"
+                          sx={{ ml: 1, opacity: 0.7 }}
+                        >
+                          ({m.details.parameter_size})
+                        </Typography>
+                      )}
+                    </MenuItem>
+                  ))}
+                  {llmModels.length === 0 && (
+                    <MenuItem value={llmModel} disabled>
+                      {llmModel ||
+                        "No models — pull one with ollama pull phi3:mini"}
+                    </MenuItem>
+                  )}
+                </Select>
+              </FormControl>
+
+              <Box
+                sx={{
+                  display: "flex",
+                  flexWrap: "wrap",
+                  gap: 1,
+                  alignItems: "center",
+                }}
+              >
+                <Typography variant="body2" color="text.secondary">
+                  Tiny model preset:
+                </Typography>
+                {TINY_MODELS.map((p) => (
+                  <Chip
+                    key={p.value}
+                    label={p.label}
+                    onClick={() => setLlmModel(p.value)}
+                    variant={llmModel === p.value ? "filled" : "outlined"}
+                    size="small"
+                  />
+                ))}
+              </Box>
+
+              <FormControl fullWidth size="small">
+                <InputLabel>Embedding model (RAG)</InputLabel>
+                <Select
+                  value={embedSelectValue}
+                  label="Embedding model (RAG)"
+                  onChange={(e: SelectChangeEvent) =>
+                    setEmbedModel(e.target.value)
+                  }
+                >
+                  {embedOptions.map((m) => (
+                    <MenuItem key={m.name} value={m.name}>
+                      {m.name}
+                    </MenuItem>
+                  ))}
+                  {embedOptions.length === 0 && (
+                    <MenuItem value={embedModel} disabled>
+                      {embedModel || "No embedding models"}
+                    </MenuItem>
+                  )}
+                </Select>
+              </FormControl>
+            </Box>
+          </Paper>
+        </>
+      )}
+
+      {provider === "openai" && (
+        <Paper sx={{ p: 3 }}>
+          <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 2 }}>
+            OpenAI configuration
+          </Typography>
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 2 }}>
+            <Box sx={{ display: "flex", alignItems: "center", gap: 1, mb: 1 }}>
+              {config?.api_key_set ? (
+                <Chip label="Key configured" color="success" size="small" />
+              ) : (
+                <Chip label="No key" color="default" size="small" />
+              )}
+            </Box>
+            <TextField
+              fullWidth
+              size="small"
+              type="password"
+              label="OpenAI API key"
+              placeholder="sk-..."
+              value={openaiApiKey}
+              onChange={(e) => setOpenaiApiKey(e.target.value)}
+              helperText="Stored securely. Leave blank to keep existing key."
+            />
+            <Box sx={{ display: "flex", gap: 1 }}>
+              <Button
+                variant="outlined"
+                size="small"
+                disabled={!openaiApiKey.trim() || validating}
+                onClick={async () => {
+                  const key = openaiApiKey.trim();
+                  if (!key) return;
+                  setValidating(true);
+                  try {
+                    const res = await api.aiValidateOpenAIKey(key);
+                    if (res.valid) {
+                      toast.showSuccess("API key is valid");
+                    } else {
+                      toast.showError(res.error || "Invalid key");
+                    }
+                  } catch (e) {
+                    toast.showError(
+                      e instanceof Error ? e.message : "Validation failed",
+                    );
+                  } finally {
+                    setValidating(false);
+                  }
+                }}
+              >
+                {validating ? "Testing…" : "Test connection"}
+              </Button>
+            </Box>
+            <FormControl fullWidth size="small">
+              <InputLabel>LLM model</InputLabel>
+              <Select
+                value={openaiLlmModel}
+                label="LLM model"
+                onChange={(e: SelectChangeEvent) =>
+                  setOpenaiLlmModel(e.target.value)
+                }
+              >
+                {OPENAI_LLM_MODELS.map((m) => (
+                  <MenuItem key={m} value={m}>
+                    {m}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
+            <Box>
+              <Typography variant="body2" color="text.secondary" gutterBottom>
+                Embedding source (RAG)
+              </Typography>
+              <RadioGroup
+                value={embedSource}
+                onChange={(e) =>
+                  setEmbedSource(e.target.value as AIEmbedSource)
+                }
+              >
+                <FormControlLabel
+                  value="openai"
+                  control={<Radio size="small" />}
+                  label="OpenAI (text-embedding-3-small) — requires re-sync"
+                />
+                <FormControlLabel
+                  value="ollama"
+                  control={<Radio size="small" />}
+                  label="Ollama (if available)"
+                />
+              </RadioGroup>
+            </Box>
+          </Box>
+        </Paper>
+      )}
 
       <Paper sx={{ p: 3 }}>
         <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 2 }}>
@@ -239,7 +410,7 @@ export function AIConfigContent() {
             <Slider
               value={maxOutputTokens}
               onChange={(_, v) => setMaxOutputTokens(v as number)}
-              min={256}
+              min={512}
               max={4096}
               step={256}
               valueLabelDisplay="auto"
@@ -314,7 +485,11 @@ export function AIConfigContent() {
         }}
       >
         <Box sx={{ display: "flex", gap: 2 }}>
-          <Button variant="contained" onClick={handleSave} disabled={saving}>
+          <Button
+            variant="contained"
+            onClick={handleSave}
+            disabled={saving || !canSave}
+          >
             {saving ? "Saving…" : "Save"}
           </Button>
           <Button variant="outlined" onClick={handleReset} disabled={!config}>

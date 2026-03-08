@@ -258,6 +258,9 @@ function normalizeResult(
   };
 }
 
+/** Max skills to display per chart to avoid ugly overflow on large datasets. */
+const MAX_SKILLS_IN_CHART = 40;
+
 /** Max chart height so all labels display. Exported for tests. */
 export const CHART_MAX_HEIGHT = 1200;
 const CHART_ROW_HEIGHT = 44;
@@ -663,7 +666,7 @@ export function ResumeAnalysisPage() {
       setResult((prev) => (prev ? { ...prev, summary: trimmed } : prev));
       if (!trimmed) {
         setSummaryError(
-          "AI summary unavailable. Ensure Ollama is running and a model is pulled (e.g. ollama pull phi3:mini).",
+          "AI summary unavailable. Check Settings > AI Config: ensure your provider is configured (Ollama running or OpenAI API key valid).",
         );
       }
     } catch (e) {
@@ -1011,9 +1014,17 @@ export function ResumeAnalysisPage() {
                           )
                         : (topPositions[0] ?? null);
                       const effectiveCat = cat ?? topPositions[0];
-                      const matching = effectiveCat?.matching_skills ?? [];
+                      const matchingRaw = effectiveCat?.matching_skills ?? [];
+                      const matching = [...matchingRaw]
+                        .sort((a, b) => (b.weight ?? 0) - (a.weight ?? 0))
+                        .slice(0, MAX_SKILLS_IN_CHART);
                       const toAddRaw = effectiveCat?.skills_to_add ?? [];
-                      const toAdd = toAddRaw.filter((s) => s.weight >= 5);
+                      const toAddFiltered = toAddRaw.filter(
+                        (s) => s.weight >= 5,
+                      );
+                      const toAdd = [...toAddFiltered]
+                        .sort((a, b) => (b.weight ?? 0) - (a.weight ?? 0))
+                        .slice(0, MAX_SKILLS_IN_CHART);
                       const score =
                         typeof effectiveCat?.match_score === "number"
                           ? effectiveCat.match_score
@@ -1172,6 +1183,8 @@ export function ResumeAnalysisPage() {
                                   >
                                     <CheckCircleOutlineIcon fontSize="small" />{" "}
                                     Matched skills (in your PDF)
+                                    {matchingRaw.length > MAX_SKILLS_IN_CHART &&
+                                      ` — top ${MAX_SKILLS_IN_CHART}`}
                                   </Typography>
                                   <MatchedSkillsChart data={matching} />
                                 </Box>
@@ -1196,6 +1209,9 @@ export function ResumeAnalysisPage() {
                                   >
                                     <AddCircleOutlineIcon fontSize="small" />{" "}
                                     Skills to add (≥5 occurrences)
+                                    {toAddRaw.filter((s) => s.weight >= 5)
+                                      .length > MAX_SKILLS_IN_CHART &&
+                                      ` — top ${MAX_SKILLS_IN_CHART}`}
                                   </Typography>
                                   <SkillsToAddChart data={toAdd} />
                                 </Box>

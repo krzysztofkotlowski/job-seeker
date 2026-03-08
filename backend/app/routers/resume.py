@@ -113,8 +113,13 @@ async def analyze_resume(
         # RAG: merge semantic matches when enabled
         if RAG_ENABLED:
             ai_cfg = get_ai_config(db)
+            embed_model = ai_cfg["embed_model"] if ai_cfg.get("embed_source") != "openai" else None
             semantic_matches = retrieve_semantic_matches(
-                db, extracted_skills, top_k=10, embed_model=ai_cfg["embed_model"]
+                db,
+                extracted_skills,
+                top_k=10,
+                embed_model=embed_model,
+                ai_config=ai_cfg,
             )
             matches = merge_keyword_and_semantic_matches(
                 keyword_matches, semantic_matches, max_total=8
@@ -167,13 +172,16 @@ async def summarize_match(
     matches = body.matches or []
     by_category = body.by_category or []
     ai_cfg = get_ai_config(db)
-    model = (body.model_override or "").strip() or ai_cfg["llm_model"]
+    model = (body.model_override or "").strip()
+    if not model:
+        model = ai_cfg["openai_llm_model"] if ai_cfg.get("provider") == "openai" else ai_cfg["llm_model"]
 
     start = time.perf_counter()
     summary, eval_count = await summarize_resume_match(
         extracted_skills,
         matches,
         by_category,
+        ai_config=ai_cfg,
         model=model or None,
         max_tokens=ai_cfg["max_output_tokens"],
         temperature=ai_cfg["temperature"],
@@ -181,10 +189,11 @@ async def summarize_match(
     latency_ms = int((time.perf_counter() - start) * 1000)
 
     if summary is None:
-        raise HTTPException(
-            503,
-            "AI summary unavailable. Ensure Ollama is running with a model (e.g. ollama pull phi3:mini).",
+        msg = (
+            "AI summary unavailable. "
+            + ("Check your OpenAI API key and model." if ai_cfg.get("provider") == "openai" else "Ensure Ollama is running with a model (e.g. ollama pull phi3:mini).")
         )
+        raise HTTPException(503, msg)
 
     user_id = None
     if user:
@@ -221,19 +230,22 @@ async def summarize_match_stream(
     matches = body.matches or []
     by_category = body.by_category or []
     ai_cfg = get_ai_config(db)
-    model = (body.model_override or "").strip() or ai_cfg["llm_model"]
+    model = (body.model_override or "").strip()
+    if not model:
+        model = ai_cfg["openai_llm_model"] if ai_cfg.get("provider") == "openai" else ai_cfg["llm_model"]
 
     async def generate():
-        async for chunk in summarize_resume_match_stream(
+        async for event in summarize_resume_match_stream(
             extracted_skills,
             matches,
             by_category,
+            ai_config=ai_cfg,
             model=model or None,
             max_tokens=ai_cfg["max_output_tokens"],
             temperature=ai_cfg["temperature"],
         ):
-            payload = json.dumps({"chunk": chunk})
-            yield f"data: {payload}\n\n"
+            # event is {"chunk": "text"} or {"error": "message"} — send as-is
+            yield f"data: {json.dumps(event)}\n\n"
 
     return StreamingResponse(
         generate(),

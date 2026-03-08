@@ -96,3 +96,52 @@ def test_is_available_true_when_model_loaded():
         mock_httpx.Client.return_value = mock_client
 
         assert embedding_service.is_available() is True
+
+
+def test_embed_text_openai_returns_vector_when_api_responds():
+    """When ai_config has embed_source=openai, uses OpenAI API."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {"data": [{"embedding": [0.5] * 1536}]}
+
+    with patch.object(embedding_service, "httpx") as mock_httpx:
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.post.return_value = mock_resp
+        mock_httpx.Client.return_value = mock_client
+
+        ai_config = {
+            "embed_source": "openai",
+            "openai_api_key": "sk-test",
+        }
+        result = embedding_service.embed_text("hello", ai_config=ai_config)
+    assert result is not None
+    assert len(result) == 1536
+    assert result[0] == 0.5
+
+
+def test_embed_batch_openai_returns_list():
+    """embed_batch with ai_config openai uses OpenAI API."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {
+        "data": [
+            {"index": 0, "embedding": [0.1] * 1536},
+            {"index": 1, "embedding": [0.2] * 1536},
+        ]
+    }
+
+    with patch.object(embedding_service, "httpx") as mock_httpx:
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.post.return_value = mock_resp
+        mock_httpx.Client.return_value = mock_client
+
+        ai_config = {"embed_source": "openai", "openai_api_key": "sk-test"}
+        result = embedding_service.embed_batch(["a", "b"], ai_config=ai_config)
+    assert len(result) == 2
+    assert len(result[0]) == 1536
