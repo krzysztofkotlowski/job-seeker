@@ -16,7 +16,14 @@ vi.mock("../api/client", () => ({
       by_category: [{ category: "Backend", count: 3 }],
       by_seniority: [],
       by_work_type: [],
-      salary_stats: { avg_min_pln: null, avg_max_pln: null, by_category: [] },
+      salary_stats: {
+        avg_min_pln: 12000,
+        avg_max_pln: 18000,
+        by_category: [
+          { category: "Backend", avg_min: 15000, avg_max: 22000 },
+          { category: "Frontend", avg_min: 12000, avg_max: 18000 },
+        ],
+      },
       added_over_time: [],
       top_companies: [],
       top_locations: [],
@@ -41,5 +48,23 @@ describe("DashboardPage", () => {
     await waitFor(() => expect(api.analytics).toHaveBeenCalled());
 
     expect(await screen.findByText(/5/)).toBeInTheDocument();
+  });
+
+  it("renders salary range chart when by_category has data", async () => {
+    renderWithRouter(<DashboardPage />);
+
+    await waitFor(() => expect(api.analytics).toHaveBeenCalled());
+
+    expect(
+      await screen.findByText("Average Salary Range by Category (PLN/mo)"),
+    ).toBeInTheDocument();
+  });
+
+  it("shows avg salary from salary_stats when by_category has ranges", async () => {
+    renderWithRouter(<DashboardPage />);
+
+    await waitFor(() => expect(api.analytics).toHaveBeenCalled());
+
+    expect(screen.getByText("12 000 - 18 000")).toBeInTheDocument();
   });
 });

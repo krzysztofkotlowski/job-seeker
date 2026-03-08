@@ -28,9 +28,88 @@ import Switch from "@mui/material/Switch";
 import { EmptyState } from "../components/EmptyState";
 import { LoadingSpinner } from "../components/LoadingSpinner";
 import { api } from "../api/client";
-import type { AnalyticsData } from "../api/types";
+import type { AnalyticsData, SalaryCategoryStat } from "../api/types";
 import { useToast } from "../contexts/useToast";
 import { STATUS_TAB_COLORS } from "../utils/job";
+
+const fmt = (n: number | null | undefined) =>
+  n != null ? n.toLocaleString("pl-PL", { maximumFractionDigits: 0 }) : "-";
+
+/** Range bar chart: each bar spans from avg_min to avg_max for readability. */
+function SalaryRangeChart({ data }: { data: SalaryCategoryStat[] }) {
+  const chartData = data.map((d) => {
+    const min = d.avg_min ?? 0;
+    const max = d.avg_max ?? min;
+    return {
+      ...d,
+      rangeMin: min,
+      rangeSpan: Math.max(0, max - min),
+    };
+  });
+
+  return (
+    <ResponsiveContainer
+      width="100%"
+      height={Math.max(280, chartData.length * 32)}
+    >
+      <BarChart
+        data={chartData}
+        layout="vertical"
+        margin={{ left: 110, right: 50 }}
+      >
+        <defs>
+          <linearGradient
+            id="salaryRangeGradient"
+            x1="0"
+            y1="0"
+            x2="1"
+            y2="0"
+          >
+            <stop offset="0%" stopColor="#a78bfa" />
+            <stop offset="100%" stopColor="#6366f1" />
+          </linearGradient>
+        </defs>
+        <CartesianGrid strokeDasharray="3 3" />
+        <XAxis
+          type="number"
+          tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
+        />
+        <YAxis
+          type="category"
+          dataKey="category"
+          width={105}
+          tick={{ fontSize: 12 }}
+        />
+        <Tooltip
+          formatter={(_, __, props) => {
+            const p = props.payload as (typeof chartData)[number];
+            return [`${fmt(p.avg_min)} - ${fmt(p.avg_max)} PLN`, "Range"];
+          }}
+          contentStyle={{ borderRadius: 8 }}
+        />
+        <Bar
+          dataKey="rangeMin"
+          stackId="salary"
+          fill="transparent"
+          isAnimationActive={false}
+        />
+        <Bar
+          dataKey="rangeSpan"
+          stackId="salary"
+          fill="url(#salaryRangeGradient)"
+          radius={[0, 4, 4, 0]}
+        >
+          <LabelList
+            dataKey="rangeSpan"
+            position="right"
+            content={<SalaryRangeLabel />}
+            style={{ fontSize: 10, fill: "#4338ca" }}
+          />
+        </Bar>
+      </BarChart>
+    </ResponsiveContainer>
+  );
+}
 
 const COLORS = [
   "#6366f1",
@@ -47,8 +126,31 @@ const COLORS = [
   "#9333ea",
 ];
 
-const fmt = (n: number | null | undefined) =>
-  n != null ? n.toLocaleString("pl-PL", { maximumFractionDigits: 0 }) : "-";
+function SalaryRangeLabel(props: {
+  x?: number;
+  y?: number;
+  value?: number;
+  payload?: SalaryCategoryStat;
+}) {
+  const p = props?.payload;
+  const min = p?.avg_min ?? 0;
+  const max = p?.avg_max ?? min;
+  const text =
+    min !== max
+      ? `${(min / 1000).toFixed(0)}k - ${(max / 1000).toFixed(0)}k`
+      : `${(max / 1000).toFixed(0)}k`;
+  return (
+    <text
+      x={props.x}
+      y={props.y}
+      textAnchor="start"
+      dominantBaseline="middle"
+      style={{ fontSize: 10, fill: "#4338ca" }}
+    >
+      {text}
+    </text>
+  );
+}
 
 export function DashboardPage() {
   const toast = useToast();
@@ -261,59 +363,10 @@ export function DashboardPage() {
         </ChartCard>
       )}
 
-      {/* Salary by category */}
+      {/* Salary by category - range bars (min to max) */}
       {data.salary_stats.by_category.length > 0 && (
         <ChartCard title="Average Salary Range by Category (PLN/mo)">
-          <ResponsiveContainer
-            width="100%"
-            height={Math.max(280, data.salary_stats.by_category.length * 32)}
-          >
-            <BarChart
-              data={data.salary_stats.by_category}
-              layout="vertical"
-              margin={{ left: 110, right: 50 }}
-            >
-              <CartesianGrid strokeDasharray="3 3" />
-              <XAxis
-                type="number"
-                tickFormatter={(v) => `${(v / 1000).toFixed(0)}k`}
-              />
-              <YAxis
-                type="category"
-                dataKey="category"
-                width={105}
-                tick={{ fontSize: 12 }}
-              />
-              <Tooltip formatter={(v) => `${fmt(v as number)} PLN`} />
-              <Bar
-                dataKey="avg_min"
-                name="Avg Min"
-                fill="#a78bfa"
-                radius={[0, 4, 4, 0]}
-              >
-                <LabelList
-                  dataKey="avg_min"
-                  position="right"
-                  formatter={(v) => `${(Number(v) / 1000).toFixed(0)}k`}
-                  style={{ fontSize: 10, fill: "#888" }}
-                />
-              </Bar>
-              <Bar
-                dataKey="avg_max"
-                name="Avg Max"
-                fill="#6366f1"
-                radius={[0, 4, 4, 0]}
-              >
-                <LabelList
-                  dataKey="avg_max"
-                  position="right"
-                  formatter={(v) => `${(Number(v) / 1000).toFixed(0)}k`}
-                  style={{ fontSize: 10, fill: "#555" }}
-                />
-              </Bar>
-              <Legend />
-            </BarChart>
-          </ResponsiveContainer>
+          <SalaryRangeChart data={data.salary_stats.by_category} />
         </ChartCard>
       )}
 

@@ -1,12 +1,25 @@
 # Job Seeker Tracker
 
-> Full-stack job tracker: scrape JustJoin.it & NoFluffJobs, store in PostgreSQL, analyze with Elasticsearch RAG + Ollama embeddings. React 19 + FastAPI. Resume PDF analysis with keyword/semantic matching, AI summaries, optional Keycloak auth. Docker Compose, Celery, rate limiting.
+> Full-stack job tracker for Polish IT market: scrape offers, match your resume with AI, and track applications. React 19, FastAPI, PostgreSQL, Elasticsearch RAG, Ollama/OpenAI.
+
+A portfolio project for job seekers who want to aggregate positions from JustJoin.it and NoFluffJobs, track application status, and get AI-powered resume analysis. Upload a PDF resume to extract skills, match against imported jobs (keyword + optional semantic RAG), and generate career advice summaries via Ollama or OpenAI.
 
 ---
 
-## Architecture Overview
+## Key Features
 
-### Container Topology
+- **Job list & detail** — Filter by status, seniority, category, work type, location; pagination; duplicate grouping
+- **Bulk import** — Scrape JustJoin.it & NoFluffJobs with Celery; resumable, per-source control
+- **Resume analysis** — PDF upload, skill extraction, keyword + semantic (RAG) matching, AI summaries
+- **AI configuration** — Switch Ollama/OpenAI; choose LLM and embedding models; inference metrics
+- **Analytics dashboard** — Top skills, salary stats, charts (Recharts)
+- **Optional auth** — Keycloak; login for import, backup, saving resume analyses
+
+---
+
+## Architecture
+
+### System Overview
 
 ```mermaid
 flowchart TB
@@ -32,86 +45,12 @@ flowchart TB
     Frontend -->|"proxy"| Backend
     Backend -->|"SQL"| Postgres
     Backend -->|"kNN search\nbulk index"| Elasticsearch
-    Backend -->|"LLM + embeddings"| Ollama
+    Backend -->|"LLM + embeddings\nOllama or OpenAI"| Ollama
     Browser -.->|"OAuth"| Keycloak
     Backend -.->|"JWT validate"| Keycloak
 ```
 
-### API Request Flow
-
-```mermaid
-flowchart LR
-    subgraph frontend [Frontend]
-        React[React 19]
-        APIClient[API Client]
-        AuthCtx[AuthContext]
-    end
-
-    subgraph backend [Backend]
-        FastAPI[FastAPI]
-        Routers[Routers]
-        Services[Services]
-    end
-
-    subgraph data [Data Layer]
-        DB[(PostgreSQL)]
-        ES[(Elasticsearch)]
-        LLM[Ollama]
-    end
-
-    React --> AuthCtx
-    React --> APIClient
-    APIClient -->|"Bearer token"| FastAPI
-    FastAPI --> Routers
-    Routers --> Services
-    Services --> DB
-    Services --> ES
-    Services --> LLM
-```
-
-### Import Pipeline
-
-```mermaid
-flowchart TB
-    subgraph user [User]
-        StartImport[POST /import/start]
-    end
-
-    subgraph backend [Backend]
-        ImportRouter[Import Router]
-        Celery[Celery Task]
-        ImportEngine[Import Engine]
-        subgraph parsers [Parsers]
-            JJ[JustJoin Parser]
-            NFJ[NoFluffJobs Parser]
-        end
-        SkillDetector[Skill Detector]
-        Currency[Currency Service]
-    end
-
-    subgraph external [External]
-        JJSite[justjoin.it]
-        NFJSite[nofluffjobs.com]
-    end
-
-    subgraph storage [Storage]
-        Postgres[(PostgreSQL)]
-    end
-
-    StartImport --> ImportRouter
-    ImportRouter --> Celery
-    Celery --> ImportEngine
-    ImportEngine -->|"per source"| JJ
-    ImportEngine -->|"per source"| NFJ
-    JJ -->|"HTTP scrape"| JJSite
-    NFJ -->|"HTTP scrape"| NFJSite
-    ImportEngine -->|"insert JobRow"| Postgres
-    ImportEngine --> Currency
-    ImportEngine --> SkillDetector
-    SkillDetector -->|"read/write"| Postgres
-```
-
-### Resume Analysis Flow
+### Resume Analysis Pipeline
 
 ```mermaid
 flowchart TB
@@ -121,113 +60,36 @@ flowchart TB
 
     subgraph backend [Backend]
         ResumeRouter[Resume Router]
-        ResumeKeywords[Resume Keywords\nPyPDF extract]
-        ResumeService[Resume Service]
+        PyPDF[PyPDF extract keywords]
         MatchJobs[match_jobs_to_skills]
-        BuildCategory[build_by_category]
         RAGCheck{RAG enabled?}
         EmbedService[Embedding Service]
-        ESService[Elasticsearch Service]
-        MergeMatches[merge_keyword_and_semantic]
-        LLMService[LLM Service]
+        ESService[Elasticsearch kNN]
+        MergeMatches[merge keyword + semantic\ndedupe, sort, limit]
+        LLMService[LLM summarize\nOllama or OpenAI]
     end
 
     subgraph data [Data Layer]
         Postgres[(PostgreSQL)]
         ES[(Elasticsearch)]
-        Ollama[Ollama]
+        LLM[Ollama / OpenAI]
     end
 
     UploadPDF --> ResumeRouter
-    ResumeRouter --> ResumeKeywords
-    ResumeKeywords -->|"keywords"| ResumeService
-    ResumeService --> MatchJobs
-    ResumeService --> BuildCategory
+    ResumeRouter --> PyPDF
+    PyPDF --> MatchJobs
     MatchJobs -->|"read jobs"| Postgres
-    BuildCategory -->|"read jobs"| Postgres
-    ResumeService --> RAGCheck
+    MatchJobs -->|"keyword matches"| MergeMatches
+    ResumeRouter --> RAGCheck
     RAGCheck -->|"yes"| EmbedService
-    EmbedService -->|"embed skills"| Ollama
-    EmbedService -->|"vector"| ESService
+    EmbedService -->|"embed skills"| LLM
+    EmbedService -->|"vectors"| ESService
     ESService -->|"kNN search"| ES
     ESService -->|"semantic matches"| MergeMatches
-    MergeMatches -->|"keyword matches"| MatchJobs
     RAGCheck -->|"no"| MergeMatches
-    MergeMatches -->|"matches"| LLMService
-    LLMService -->|"summarize"| Ollama
+    MergeMatches --> LLMService
+    LLMService --> LLM
 ```
-
-### Embedding Sync Flow
-
-```mermaid
-flowchart TB
-    subgraph trigger [Trigger]
-        SyncAPI[POST /jobs/sync-embeddings]
-        Startup[Backend startup]
-    end
-
-    subgraph backend [Backend]
-        JobsRouter[Jobs Router]
-        ESClient[ES Service]
-        EmbedClient[Embedding Service]
-    end
-
-    subgraph data [Data Layer]
-        Postgres[(PostgreSQL)]
-        Ollama[Ollama]
-        Elasticsearch[(Elasticsearch)]
-    end
-
-    SyncAPI --> JobsRouter
-    Startup -->|"background thread"| JobsRouter
-    JobsRouter -->|"fetch JobRow"| Postgres
-    JobsRouter --> EmbedClient
-    EmbedClient -->|"embed_batch\njob text"| Ollama
-    EmbedClient -->|"vectors"| ESClient
-    ESClient -->|"bulk index"| Elasticsearch
-```
-
-### Resume RAG Merge Logic
-
-```mermaid
-flowchart LR
-    subgraph inputs [Inputs]
-        Keyword[Keyword matches\nDB query]
-        Semantic[Semantic matches\nES kNN]
-    end
-
-    subgraph merge [Merge]
-        Dedup[deduplicate by job_id]
-        Sort[sort by score]
-        Limit[max_total=8]
-    end
-
-    subgraph output [Output]
-        Matches[Matches to user]
-    end
-
-    Keyword --> Dedup
-    Semantic --> Dedup
-    Dedup --> Sort
-    Sort --> Limit
-    Limit --> Matches
-```
-
----
-
-## Features
-
-- **Job list** — Filter by status, saved, seniority, category, work type, location; pagination; duplicate grouping; alternate listings (same job on multiple sites).
-- **Job detail** — View/edit job, mark saved, see detected skills and alternate URLs.
-- **Bulk import** — Import from JustJoin.it and NoFluffJobs with resumable progress; start/cancel per source or all.
-- **Analytics / dashboard** — Top skills, salary stats, charts (Recharts).
-- **Skills** — Detected skills per job; summary and match endpoints.
-- **Backup** — Download database as `.sql` (PostgreSQL `pg_dump`).
-- **Resume analysis** — Upload PDF, extract skills, compare to positions with match score and bar charts. Optional LLM summary (Ollama) for AI-generated career advice. RAG (vector search via Elasticsearch) enriches matches with semantic retrieval when enabled.
-- **Keycloak auth** — Optional; app works without it. Login required for import, backup, and saving resume analyses when `KEYCLOAK_ENABLED=true`.
-- **User & resume history** — Authenticated users get resume analyses persisted with extracted keywords.
-- **Dark mode** — UI theme toggle.
-- **API v1** — REST under `/api/v1/` with standardized error shape `{ error: { code, message, details? } }`.
 
 ---
 
@@ -237,7 +99,7 @@ flowchart LR
 | -------- | ----------------------------------------------------------------------------------------------------------------- |
 | Backend  | FastAPI 2.x, SQLAlchemy 2, Celery (eager by default, no Redis required for dev), PostgreSQL                       |
 | Frontend | React 19, TypeScript, Vite 7, MUI, Tailwind CSS, Recharts, React Router                                           |
-| AI       | Ollama (LLM + embeddings), RAG via Elasticsearch dense vectors                                                    |
+| AI       | Ollama or OpenAI (LLM + embeddings), RAG via Elasticsearch dense vectors                                          |
 | Run      | Docker Compose (Postgres + backend + frontend + Ollama + Elasticsearch; Keycloak opt-in via `--profile keycloak`) |
 
 ---
@@ -261,22 +123,20 @@ Default DB: `postgresql://jobseeker:jobseeker@postgres:5432/jobseeker` (inside C
 
 **Keycloak (optional):** Auth is disabled by default. See [docs/KEYCLOAK_SETUP.md](docs/KEYCLOAK_SETUP.md). To enable: `KEYCLOAK_ENABLED=true docker compose --profile keycloak up`.
 
-**LLM summary (optional):** After resume analysis, users can click "Generate AI summary" to get AI-generated career advice. The summary streams as the model generates it and is rendered as markdown with clickable job links. Requires Ollama running with a model. The `./scripts/test-and-build.sh` script pulls the model automatically. For manual `docker compose up`, run:
+**LLM summary (optional):** After resume analysis, users can click "Generate AI summary" to get AI-generated career advice. The summary streams as the model generates it and is rendered as markdown with clickable job links. Requires Ollama or OpenAI configured. The `./scripts/test-and-build.sh` script pulls the Ollama model automatically. For manual `docker compose up`:
 
 ```bash
 docker compose exec ollama ollama pull phi3:mini
 ```
 
-Default model is `phi3:mini`. For different quality: `llama3.2:1b`, `llama3.2:3b`, or `qwen3.5:0.8b`. Set `LLM_MODEL` in backend env if needed. Optional: create a custom model with the project Modelfile for improved prompt adherence:
+Default model is `phi3:mini`. Use Settings → AI Config to switch to OpenAI or change models. Optional: create a custom model with the project Modelfile:
 
 ```bash
 ollama create jobseeker-advisor -f Modelfile
-# Then set LLM_MODEL=jobseeker-advisor in backend env
+# Then set LLM_MODEL=jobseeker-advisor in backend env or via AI Config
 ```
 
-**RAG (vector search):** When `RAG_ENABLED=true` and Elasticsearch is running, resume analysis uses semantic search to find additional job matches. After importing jobs, run `POST /api/v1/jobs/sync-embeddings` to index jobs for RAG. Pull the embedding model: `docker compose exec ollama ollama pull nomic-embed-text`.
-
-**LLM 500 error troubleshooting:** If you see "AI summary unavailable" with a 500 from Ollama: (1) Ensure the model is pulled: `docker compose exec ollama ollama pull phi3:mini`. (2) Test locally: `docker compose exec ollama ollama run phi3:mini "Hello"`. (3) Reduce `LLM_MAX_OUTPUT_TOKENS` to 512 if still failing. (4) Check backend logs for the full Ollama error response. (5) Update Ollama: `docker compose pull ollama` and restart. (6) **Cgroup "max" parsing bug:** If Ollama logs show `failed to parse CPU allowed micro secs` with `parsing "max": invalid syntax`, the container's cgroup reports unlimited CPU and Ollama fails to parse it. The project's `docker-compose.yml` sets `deploy.resources.limits` (cpus, memory) and `OLLAMA_NUM_THREAD` to work around this. Run with `docker compose --compatibility up` so these limits are applied (plain `docker compose up` ignores `deploy` outside Swarm). If using a custom compose, add explicit CPU limits (e.g. `cpus: "4"`) to the Ollama service. (7) **"signal: killed" / OOM:** If `ollama run phi3:mini` fails with "llama runner process has terminated: signal: killed", the container ran out of memory. Set Docker Desktop memory (Settings → Resources → Memory) to at least 6GB for phi3:mini. For lower-memory setups, use `LLM_MODEL=llama3.2:1b` (set in backend env, then `ollama pull llama3.2:1b`).
+**RAG (vector search):** When `RAG_ENABLED=true` and Elasticsearch is running, resume analysis uses semantic search to find additional job matches. After importing jobs, run `POST /api/v1/jobs/sync-embeddings` (or use the streaming endpoint for progress). Pull the embedding model: `docker compose exec ollama ollama pull nomic-embed-text`.
 
 ### Local Development
 
@@ -312,6 +172,25 @@ Runs backend + frontend tests, then `docker compose up --build -d`, then pulls t
 
 ---
 
+## Features
+
+- **Job list** — Filter by status, saved, seniority, category, work type, location; pagination; duplicate grouping; alternate listings (same job on multiple sites).
+- **Job detail** — View/edit job, mark saved, see detected skills and alternate URLs.
+- **Bulk import** — Import from JustJoin.it and NoFluffJobs with resumable progress; start/cancel per source or all.
+- **Analytics / dashboard** — Top skills, salary stats, charts (Recharts).
+- **Skills** — Detected skills per job; summary and match endpoints.
+- **Backup** — Download database as `.sql` (PostgreSQL `pg_dump`).
+- **Resume analysis** — Upload PDF, extract skills, compare to positions with match score and bar charts. Optional LLM summary (Ollama or OpenAI) for AI-generated career advice. RAG (vector search via Elasticsearch) enriches matches with semantic retrieval when enabled.
+- **AI configuration** — Switch between Ollama (local) and OpenAI; choose LLM and embedding models; temperature and token limits. Inference metrics (latency, tokens) per model in Settings.
+- **OpenAI support** — Use GPT-4o-mini or other models when API key is configured via Settings; embeddings from OpenAI or Ollama.
+- **Streaming embedding sync** — Progress feedback when indexing jobs for RAG.
+- **Keycloak auth** — Optional; app works without it. Login required for import, backup, and saving resume analyses when `KEYCLOAK_ENABLED=true`.
+- **User & resume history** — Authenticated users get resume analyses persisted with extracted keywords.
+- **Dark mode** — UI theme toggle.
+- **API v1** — REST under `/api/v1/` with standardized error shape `{ error: { code, message, details? } }`.
+
+---
+
 ## API Overview
 
 | Area   | Base path        | Notes                                                                                                                                                       |
@@ -321,6 +200,7 @@ Runs backend + frontend tests, then `docker compose up --build -d`, then pulls t
 | Import | `/api/v1/import` | Status, start (all or per source), cancel                                                                                                                   |
 | Backup | `/api/v1/backup` | POST create → download .sql                                                                                                                                 |
 | Resume | `/api/v1/resume` | Analyze PDF, summarize, stream, history                                                                                                                     |
+| AI     | `/api/v1/ai`     | Models, config, validate-key, metrics                                                                                                                       |
 | Health | `/api/v1/health` | `{"status":"ok", "llm_available": bool, "database_available": bool, "elasticsearch_available": bool}`                                                       |
 
 OpenAPI: `/api/v1/docs`, `/api/v1/redoc`, `/api/v1/openapi.json`.
@@ -360,9 +240,9 @@ job-seeker/
 │   │   ├── celery_app.py     # Celery (eager by default)
 │   │   ├── import_engine.py  # Bulk import state & recovery
 │   │   ├── models/           # SQLAlchemy models, Pydantic schemas
-│   │   ├── routers/          # jobs, skills, imports, backup, resume
+│   │   ├── routers/          # jobs, skills, imports, backup, resume, ai_config
 │   │   ├── parsers/          # JustJoin, NoFluffJobs scrapers
-│   │   ├── services/         # currency, resume, llm, embedding, elasticsearch
+│   │   ├── services/         # currency, resume, llm, embedding, elasticsearch, ai_config, inference_log
 │   │   └── migrations/
 │   ├── requirements.txt
 │   ├── Dockerfile
@@ -372,6 +252,7 @@ job-seeker/
 │   │   ├── App.tsx
 │   │   ├── api/              # client, types
 │   │   ├── auth/             # AuthContext, useAuth
+│   │   ├── components/       # SettingsModal, AIConfigContent, ImportContent, etc.
 │   │   ├── contexts/         # ToastContext, useToast
 │   │   └── pages/            # JobList, JobDetail, Import, Dashboard, Skills, Resume, etc.
 │   ├── package.json
@@ -393,18 +274,18 @@ Copy `.env.example` to `.env` and adjust. See `.env.example` for all variables.
 | ----------------------- | ---------------------------------------------------------------------------------------------------------------------------------------- |
 | `DATABASE_URL`          | PostgreSQL URL (required for backend).                                                                                                   |
 | `ENRICH_ON_IMPORT`      | When set (`1`, `true`, `yes`), NoFluffJobs import fetches each job page for description and nice-to-have skills. Slower but richer data. |
-| `LLM_URL`               | Ollama API URL (e.g. `http://ollama:11434`). If unset, resume summaries are disabled.                                                    |
-| `LLM_MODEL`             | Model name for summarization (default: `phi3:mini`). Use `llama3.2:1b`, `qwen3.5:0.8b`, or `llama3.2:3b` for different quality.         |
+| `LLM_URL`               | Ollama API URL (e.g. `http://ollama:11434`). If unset, resume summaries use OpenAI when configured.                                      |
+| `LLM_MODEL`             | Model name for summarization (default: `phi3:mini`). Overridable via AI Config.                                                          |
 | `LLM_TIMEOUT`           | Timeout in seconds for LLM requests (default: 30).                                                                                       |
 | `LLM_SUMMARIZE_TIMEOUT` | Timeout for on-demand summarize (default: 90). Increase on small containers.                                                             |
-| `LLM_MAX_OUTPUT_TOKENS` | Max tokens for summary output (default: 1024). Lower values help avoid 500 errors on small models or low-memory systems.                  |
+| `LLM_MAX_OUTPUT_TOKENS` | Max tokens for summary output (default: 1024). Lower values help avoid 500 errors on small models or low-memory systems.                 |
 | `ELASTICSEARCH_URL`     | Elasticsearch URL for RAG (default: `http://localhost:9200`).                                                                            |
-| `EMBED_MODEL`           | Ollama embedding model (default: `nomic-embed-text`). Run `ollama pull nomic-embed-text`.                                                |
+| `EMBED_MODEL`           | Ollama embedding model (default: `nomic-embed-text`). Overridable via AI Config.                                                         |
 | `EMBED_DIMS`            | Embedding dimensions (default: 768 for nomic-embed-text).                                                                                |
 | `RAG_ENABLED`           | When `true`, resume analysis merges keyword + semantic matches.                                                                          |
 | `CORS_ORIGINS`          | Comma-separated allowed origins (default: localhost dev URLs).                                                                           |
 | `RATE_LIMIT`            | Global rate limit, e.g. `100/minute` (default: 100/minute).                                                                              |
 
-**API versioning:** v1 is under `/api/v1/`. For v2, we would add `/api/v2/` and document deprecation of v1 with a timeline.
+**OpenAI API key:** Stored in DB via Settings → AI Config. Not in env; use the UI or `PUT /api/v1/ai/config`.
 
 Celery runs in eager mode by default so imports work without Redis; optional Redis can be added for real background workers.
