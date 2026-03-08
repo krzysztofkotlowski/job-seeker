@@ -1,3 +1,4 @@
+import type { ComponentProps } from "react";
 import { useEffect, useState } from "react";
 import {
   BarChart,
@@ -25,6 +26,8 @@ import type { SelectChangeEvent } from "@mui/material/Select";
 import MenuItem from "@mui/material/MenuItem";
 import FormControlLabel from "@mui/material/FormControlLabel";
 import Switch from "@mui/material/Switch";
+import { useTheme } from "@mui/material/styles";
+import { ChartTooltip } from "../components/ChartTooltip";
 import { EmptyState } from "../components/EmptyState";
 import { LoadingSpinner } from "../components/LoadingSpinner";
 import { api } from "../api/client";
@@ -37,6 +40,12 @@ const fmt = (n: number | null | undefined) =>
 
 /** Range bar chart: each bar spans from avg_min to avg_max for readability. */
 function SalaryRangeChart({ data }: { data: SalaryCategoryStat[] }) {
+  const theme = useTheme();
+  const labelColor =
+    theme.palette.mode === "dark"
+      ? theme.palette.grey[100]
+      : theme.palette.common.white;
+
   const chartData = data.map((d) => {
     const min = d.avg_min ?? 0;
     const max = d.avg_max ?? min;
@@ -55,7 +64,7 @@ function SalaryRangeChart({ data }: { data: SalaryCategoryStat[] }) {
       <BarChart
         data={chartData}
         layout="vertical"
-        margin={{ left: 110, right: 50 }}
+        margin={{ top: 24, left: 110, right: 50, bottom: 24 }}
       >
         <defs>
           <linearGradient
@@ -81,11 +90,28 @@ function SalaryRangeChart({ data }: { data: SalaryCategoryStat[] }) {
           tick={{ fontSize: 12 }}
         />
         <Tooltip
-          formatter={(_, __, props) => {
-            const p = props.payload as (typeof chartData)[number];
-            return [`${fmt(p.avg_min)} - ${fmt(p.avg_max)} PLN`, "Range"];
+          content={({ active, payload }) => {
+            if (!active || !payload?.length) return null;
+            const p = payload[0]?.payload as (typeof chartData)[number];
+            if (!p) return null;
+            return (
+              <ChartTooltip
+                active
+                payload={[
+                  {
+                    name: "",
+                    value: `${fmt(p.avg_min)} - ${fmt(p.avg_max)} PLN/mo`,
+                  },
+                ]}
+                label={p.category}
+              />
+            );
           }}
-          contentStyle={{ borderRadius: 8 }}
+          contentStyle={{
+            background: "transparent",
+            border: "none",
+            padding: 0,
+          }}
         />
         <Bar
           dataKey="rangeMin"
@@ -97,13 +123,34 @@ function SalaryRangeChart({ data }: { data: SalaryCategoryStat[] }) {
           dataKey="rangeSpan"
           stackId="salary"
           fill="url(#salaryRangeGradient)"
-          radius={[0, 4, 4, 0]}
+          radius={8}
         >
           <LabelList
             dataKey="rangeSpan"
             position="right"
-            content={<SalaryRangeLabel />}
-            style={{ fontSize: 10, fill: "#4338ca" }}
+            content={((props: Record<string, unknown>) => {
+              const p = props.payload as SalaryCategoryStat | undefined;
+              const datum = p ?? chartData[(props.index as number) ?? 0];
+              const min = datum?.avg_min ?? 0;
+              const max = datum?.avg_max ?? min;
+              const text =
+                min !== max
+                  ? `${(min / 1000).toFixed(0)}k - ${(max / 1000).toFixed(0)}k`
+                  : `${(max / 1000).toFixed(0)}k`;
+              const xVal = Number(props.x) || 0;
+              return (
+                <text
+                  x={xVal + 6}
+                  y={props.y as number}
+                  textAnchor="start"
+                  dominantBaseline="middle"
+                  style={{ fontSize: 13, fontWeight: 600, fill: labelColor }}
+                >
+                  {text}
+                </text>
+              );
+            }) as never}
+            style={{ fontSize: 13, fontWeight: 600, fill: labelColor }}
           />
         </Bar>
       </BarChart>
@@ -125,32 +172,6 @@ const COLORS = [
   "#6d28d9",
   "#9333ea",
 ];
-
-function SalaryRangeLabel(props: {
-  x?: number;
-  y?: number;
-  value?: number;
-  payload?: SalaryCategoryStat;
-}) {
-  const p = props?.payload;
-  const min = p?.avg_min ?? 0;
-  const max = p?.avg_max ?? min;
-  const text =
-    min !== max
-      ? `${(min / 1000).toFixed(0)}k - ${(max / 1000).toFixed(0)}k`
-      : `${(max / 1000).toFixed(0)}k`;
-  return (
-    <text
-      x={props.x}
-      y={props.y}
-      textAnchor="start"
-      dominantBaseline="middle"
-      style={{ fontSize: 10, fill: "#4338ca" }}
-    >
-      {text}
-    </text>
-  );
-}
 
 export function DashboardPage() {
   const toast = useToast();
@@ -299,7 +320,14 @@ export function DashboardPage() {
                   <Cell key={i} fill={COLORS[i % COLORS.length]} />
                 ))}
               </Pie>
-              <Tooltip />
+              <Tooltip
+                content={(props) => <ChartTooltip {...(props as ComponentProps<typeof ChartTooltip>)} />}
+                contentStyle={{
+                  background: "transparent",
+                  border: "none",
+                  padding: 0,
+                }}
+              />
             </PieChart>
           </ResponsiveContainer>
         </ChartCard>
@@ -323,7 +351,14 @@ export function DashboardPage() {
                   />
                 ))}
               </Pie>
-              <Tooltip />
+              <Tooltip
+                content={(props) => <ChartTooltip {...(props as ComponentProps<typeof ChartTooltip>)} />}
+                contentStyle={{
+                  background: "transparent",
+                  border: "none",
+                  padding: 0,
+                }}
+              />
               <Legend />
             </PieChart>
           </ResponsiveContainer>
@@ -350,7 +385,14 @@ export function DashboardPage() {
                 width={105}
                 tick={{ fontSize: 12 }}
               />
-              <Tooltip />
+              <Tooltip
+                content={(props) => <ChartTooltip {...(props as ComponentProps<typeof ChartTooltip>)} />}
+                contentStyle={{
+                  background: "transparent",
+                  border: "none",
+                  padding: 0,
+                }}
+              />
               <Bar dataKey="count" fill="#6366f1" radius={[0, 4, 4, 0]}>
                 <LabelList
                   dataKey="count"
@@ -391,7 +433,14 @@ export function DashboardPage() {
                     <Cell key={i} fill={COLORS[i % COLORS.length]} />
                   ))}
                 </Pie>
-                <Tooltip />
+                <Tooltip
+                  content={(props) => <ChartTooltip {...(props as ComponentProps<typeof ChartTooltip>)} />}
+                  contentStyle={{
+                    background: "transparent",
+                    border: "none",
+                    padding: 0,
+                  }}
+                />
                 <Legend />
               </PieChart>
             </ResponsiveContainer>
@@ -405,7 +454,14 @@ export function DashboardPage() {
                 <CartesianGrid strokeDasharray="3 3" />
                 <XAxis dataKey="work_type" tick={{ fontSize: 12 }} />
                 <YAxis />
-                <Tooltip />
+                <Tooltip
+                  content={(props) => <ChartTooltip {...(props as ComponentProps<typeof ChartTooltip>)} />}
+                  contentStyle={{
+                    background: "transparent",
+                    border: "none",
+                    padding: 0,
+                  }}
+                />
                 <Bar dataKey="count" fill="#0ea5e9" radius={[4, 4, 0, 0]}>
                   <LabelList
                     dataKey="count"
@@ -427,7 +483,14 @@ export function DashboardPage() {
               <CartesianGrid strokeDasharray="3 3" />
               <XAxis dataKey="date" tick={{ fontSize: 11 }} />
               <YAxis />
-              <Tooltip />
+              <Tooltip
+                content={(props) => <ChartTooltip {...(props as ComponentProps<typeof ChartTooltip>)} />}
+                contentStyle={{
+                  background: "transparent",
+                  border: "none",
+                  padding: 0,
+                }}
+              />
               <Area
                 type="monotone"
                 dataKey="count"

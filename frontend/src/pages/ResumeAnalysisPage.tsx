@@ -1,3 +1,4 @@
+import type { ComponentProps } from "react";
 import { useCallback, useEffect, useRef, useState, memo } from "react";
 import {
   BarChart,
@@ -11,6 +12,7 @@ import {
 } from "recharts";
 import Box from "@mui/material/Box";
 import Paper from "@mui/material/Paper";
+import { ChartTooltip } from "../components/ChartTooltip";
 import Fade from "@mui/material/Fade";
 import Grow from "@mui/material/Grow";
 import Typography from "@mui/material/Typography";
@@ -302,7 +304,19 @@ const MatchedSkillsChart = memo(function MatchedSkillsChart({
           width={200}
           tick={{ fontSize: 14 }}
         />
-        <Tooltip formatter={(v) => [`×${v ?? 0}`, "Occurrences"]} />
+        <Tooltip
+          content={(props) => (
+            <ChartTooltip
+              {...(props as ComponentProps<typeof ChartTooltip>)}
+              formatter={(v) => [`×${v ?? 0}`, "Occurrences"]}
+            />
+          )}
+          contentStyle={{
+            background: "transparent",
+            border: "none",
+            padding: 0,
+          }}
+        />
         <Bar
           dataKey="weight"
           fill="#22c55e"
@@ -350,7 +364,19 @@ const SkillsToAddChart = memo(function SkillsToAddChart({
           width={200}
           tick={{ fontSize: 14 }}
         />
-        <Tooltip formatter={(v) => [`×${v ?? 0}`, "Occurrences"]} />
+        <Tooltip
+          content={(props) => (
+            <ChartTooltip
+              {...(props as ComponentProps<typeof ChartTooltip>)}
+              formatter={(v) => [`×${v ?? 0}`, "Occurrences"]}
+            />
+          )}
+          contentStyle={{
+            background: "transparent",
+            border: "none",
+            padding: 0,
+          }}
+        />
         <Bar
           dataKey="weight"
           fill="#ef4444"
