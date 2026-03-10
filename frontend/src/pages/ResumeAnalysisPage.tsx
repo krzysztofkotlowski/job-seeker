@@ -21,6 +21,7 @@ import Button from "@mui/material/Button";
 import Alert from "@mui/material/Alert";
 import Chip from "@mui/material/Chip";
 import LinearProgress from "@mui/material/LinearProgress";
+import Collapse from "@mui/material/Collapse";
 import FormControl from "@mui/material/FormControl";
 import InputLabel from "@mui/material/InputLabel";
 import Select from "@mui/material/Select";
@@ -31,6 +32,8 @@ import CheckCircleOutlineIcon from "@mui/icons-material/CheckCircleOutline";
 import AddCircleOutlineIcon from "@mui/icons-material/AddCircleOutline";
 import AutoAwesomeIcon from "@mui/icons-material/AutoAwesome";
 import OpenInNewIcon from "@mui/icons-material/OpenInNew";
+import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
+import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "../api/client";
@@ -412,6 +415,13 @@ function normalizeScore(score: number, min: number, max: number): number {
   return Math.round(((score - min) / (max - min)) * 100);
 }
 
+function recommendationSourceLabel(rec: ResumeRecommendation): string {
+  const sources = rec.explanation?.sources;
+  if (sources?.keyword && sources?.semantic) return "Hybrid";
+  if (sources?.semantic) return "Semantic";
+  return "Keyword";
+}
+
 const RecommendationCard = memo(function RecommendationCard({
   rec,
   relevancePercent,
@@ -419,11 +429,30 @@ const RecommendationCard = memo(function RecommendationCard({
   rec: ResumeRecommendation;
   relevancePercent: number;
 }) {
+  const [expanded, setExpanded] = useState(false);
   const j = rec.job;
   const title = j?.title ?? "Job";
   const company = j?.company ?? "";
   const url = (j?.url ?? "").trim();
   const category = j?.category ?? "";
+  const explanation = rec.explanation;
+  const inlineMatched = explanation?.matched_skills?.slice(0, 3) ?? [];
+  const matchedOverflow = Math.max(
+    0,
+    (explanation?.matched_skills?.length ?? 0) - inlineMatched.length,
+  );
+  const categoryLabel =
+    explanation?.category_overlap?.category &&
+    explanation.category_overlap.match_score != null
+      ? `${explanation.category_overlap.category} ${explanation.category_overlap.match_score}/100`
+      : null;
+  const hasDetails = Boolean(
+    (explanation?.matched_skills?.length ?? 0) > inlineMatched.length ||
+      (explanation?.missing_skills?.length ?? 0) > 0 ||
+      explanation?.category_overlap ||
+      explanation?.keyword_rank != null ||
+      explanation?.semantic_rank != null,
+  );
 
   return (
     <Paper
@@ -432,10 +461,6 @@ const RecommendationCard = memo(function RecommendationCard({
       sx={{
         px: 2,
         py: 1.5,
-        display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        gap: 1.5,
         transition: "box-shadow 0.2s ease",
         "&:hover": { boxShadow: 1 },
       }}
@@ -443,66 +468,194 @@ const RecommendationCard = memo(function RecommendationCard({
       <Box
         sx={{
           display: "flex",
-          alignItems: "center",
+          alignItems: "flex-start",
           gap: 1.5,
-          flex: 1,
-          minWidth: 0,
+          justifyContent: "space-between",
         }}
       >
         <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography variant="subtitle2" fontWeight={600} noWrap>
+          <Typography variant="subtitle2" fontWeight={600}>
             {title}
           </Typography>
           {company && (
-            <Typography variant="body2" color="text.secondary" noWrap>
+            <Typography variant="body2" color="text.secondary">
               {company}
             </Typography>
           )}
-        </Box>
-        {category && (
-          <Chip
-            label={category}
-            size="small"
-            variant="outlined"
-            sx={{ flexShrink: 0 }}
-          />
-        )}
-      </Box>
-      <Box
-        sx={{
-          flexShrink: 0,
-          display: "flex",
-          alignItems: "center",
-          gap: 1,
-        }}
-      >
-        <Chip
-          label={`${relevancePercent}%`}
-          size="small"
-          color="primary"
-          variant="filled"
-          sx={{ fontWeight: 600, fontSize: "0.75rem" }}
-        />
-        {url && url.startsWith("http") && (
-          <a
-            href={url}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{
-              display: "inline-flex",
+          {explanation?.summary ? (
+            <Typography
+              variant="body2"
+              color="text.secondary"
+              sx={{ mt: 0.75 }}
+            >
+              {explanation.summary}
+            </Typography>
+          ) : null}
+          <Box
+            sx={{
+              mt: 1,
+              display: "flex",
+              flexWrap: "wrap",
+              gap: 0.75,
               alignItems: "center",
-              gap: 4,
-              color: "var(--mui-palette-primary-main)",
-              textDecoration: "none",
-              fontSize: "0.8125rem",
-              whiteSpace: "nowrap",
             }}
           >
-            <OpenInNewIcon sx={{ fontSize: 16 }} />
-            Open
-          </a>
-        )}
+            {inlineMatched.map((skill) => (
+              <Chip
+                key={skill}
+                label={skill}
+                size="small"
+                color="success"
+                variant="outlined"
+              />
+            ))}
+            {matchedOverflow > 0 ? (
+              <Chip
+                label={`+${matchedOverflow} more skills`}
+                size="small"
+                variant="outlined"
+              />
+            ) : null}
+            <Chip
+              label={recommendationSourceLabel(rec)}
+              size="small"
+              color="secondary"
+              variant="outlined"
+            />
+            {category && (
+              <Chip
+                label={category}
+                size="small"
+                variant="outlined"
+              />
+            )}
+            {categoryLabel ? (
+              <Chip
+                label={`Category fit ${categoryLabel}`}
+                size="small"
+                color="primary"
+                variant="outlined"
+              />
+            ) : null}
+          </Box>
+        </Box>
+        <Box
+          sx={{
+            flexShrink: 0,
+            display: "flex",
+            flexDirection: "column",
+            alignItems: "flex-end",
+            gap: 1,
+            minWidth: "fit-content",
+          }}
+        >
+          <Chip
+            label={`${relevancePercent}%`}
+            size="small"
+            color="primary"
+            variant="filled"
+            sx={{ fontWeight: 600, fontSize: "0.75rem" }}
+          />
+          {url && url.startsWith("http") && (
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                color: "var(--mui-palette-primary-main)",
+                textDecoration: "none",
+                fontSize: "0.8125rem",
+                whiteSpace: "nowrap",
+              }}
+            >
+              <OpenInNewIcon sx={{ fontSize: 16 }} />
+              Open
+            </a>
+          )}
+          {hasDetails ? (
+            <Button
+              size="small"
+              onClick={() => setExpanded((prev) => !prev)}
+              endIcon={
+                expanded ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />
+              }
+              sx={{ minWidth: 0, px: 0.5 }}
+            >
+              {expanded ? "Hide details" : "Why this matched"}
+            </Button>
+          ) : null}
+        </Box>
       </Box>
+      {hasDetails ? (
+        <Collapse in={expanded} timeout="auto" unmountOnExit>
+          <Box
+            data-testid="recommendation-details"
+            sx={{
+              mt: 1.5,
+              pt: 1.5,
+              borderTop: "1px solid",
+              borderColor: "divider",
+              display: "flex",
+              flexDirection: "column",
+              gap: 1.25,
+            }}
+          >
+            {explanation?.matched_skills?.length ? (
+              <Box>
+                <Typography variant="caption" color="text.secondary">
+                  Matched skills
+                </Typography>
+                <Box sx={{ mt: 0.5, display: "flex", flexWrap: "wrap", gap: 0.75 }}>
+                  {explanation.matched_skills.map((skill) => (
+                    <Chip
+                      key={skill}
+                      label={skill}
+                      size="small"
+                      color="success"
+                      variant="outlined"
+                    />
+                  ))}
+                </Box>
+              </Box>
+            ) : null}
+            {explanation?.missing_skills?.length ? (
+              <Box>
+                <Typography variant="caption" color="text.secondary">
+                  Missing skills to strengthen this match
+                </Typography>
+                <Box sx={{ mt: 0.5, display: "flex", flexWrap: "wrap", gap: 0.75 }}>
+                  {explanation.missing_skills.map((skill) => (
+                    <Chip key={skill} label={skill} size="small" variant="outlined" />
+                  ))}
+                </Box>
+              </Box>
+            ) : null}
+            {categoryLabel ? (
+              <Typography variant="caption" color="text.secondary">
+                Category overlap: {categoryLabel}
+              </Typography>
+            ) : null}
+            {explanation ? (
+              <Typography variant="caption" color="text.secondary">
+                Search signals:{" "}
+                {[
+                  explanation.keyword_rank != null
+                    ? `keyword #${explanation.keyword_rank}`
+                    : null,
+                  explanation.semantic_rank != null
+                    ? `semantic #${explanation.semantic_rank}`
+                    : null,
+                ]
+                  .filter(Boolean)
+                  .join(" · ") || recommendationSourceLabel(rec)}
+              </Typography>
+            ) : null}
+          </Box>
+        </Collapse>
+      ) : null}
     </Paper>
   );
 });

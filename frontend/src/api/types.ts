@@ -179,6 +179,22 @@ export interface ResumeByCategory {
 export interface ResumeRecommendation {
   job: Pick<Job, "id" | "title" | "company" | "url" | "category">;
   score?: number;
+  explanation?: {
+    summary: string;
+    matched_skills: string[];
+    missing_skills: string[];
+    category_overlap: {
+      category: string | null;
+      match_score: number | null;
+    } | null;
+    sources: {
+      keyword: boolean;
+      semantic: boolean;
+    };
+    keyword_rank: number | null;
+    semantic_rank: number | null;
+    retrieval_reason: "hybrid_match" | "semantic_match" | "keyword_match";
+  };
 }
 
 export interface EmbeddingSyncRun {

@@ -547,7 +547,7 @@ def search_keyword(
         if not hits:
             log.debug("Keyword search returned no hits (index=%s, query_len=%d)", target_index, len(query_text.strip()))
         out = []
-        for h in hits:
+        for idx, h in enumerate(hits, start=1):
             src = h.get("_source", {})
             score = h.get("_score", 0)
             out.append({
@@ -557,6 +557,9 @@ def search_keyword(
                 "url": src.get("url", ""),
                 "category": src.get("category", ""),
                 "score": float(score),
+                "keyword_score": float(score),
+                "keyword_rank": idx,
+                "sources": {"keyword": True, "semantic": False},
             })
         return out
     except Exception as e:
@@ -606,6 +609,14 @@ def _merge_rrf(
         if doc:
             doc = dict(doc)
             doc["score"] = rrf_score
+            doc["keyword_score"] = doc_a.get(jid, {}).get("keyword_score")
+            doc["semantic_score"] = doc_b.get(jid, {}).get("semantic_score")
+            doc["keyword_rank"] = rank_a.get(jid)
+            doc["semantic_rank"] = rank_b.get(jid)
+            doc["sources"] = {
+                "keyword": jid in rank_a,
+                "semantic": jid in rank_b,
+            }
             scored.append((rrf_score, doc))
 
     scored.sort(key=lambda x: -x[0])
@@ -641,7 +652,7 @@ def search_similar(
         if not hits:
             log.debug("kNN search returned no hits (index=%s, embedding_dims=%d)", target_index, len(query_embedding))
         out = []
-        for h in hits:
+        for idx, h in enumerate(hits, start=1):
             src = h.get("_source", {})
             score = h.get("_score", 0)
             out.append({
@@ -651,6 +662,9 @@ def search_similar(
                 "url": src.get("url", ""),
                 "category": src.get("category", ""),
                 "score": float(score),
+                "semantic_score": float(score),
+                "semantic_rank": idx,
+                "sources": {"keyword": False, "semantic": True},
             })
         return out
     except Exception as e:

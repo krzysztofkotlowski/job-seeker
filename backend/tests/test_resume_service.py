@@ -56,6 +56,28 @@ def _create_active_run(
     return row
 
 
+def _seed_category_jobs(db, *, category: str, skills: list[str], count: int = 5):
+    from uuid import uuid4
+
+    from app.models.tables import JobRow
+
+    for idx in range(count):
+        db.add(
+            JobRow(
+                id=uuid4(),
+                url=f"https://example.com/{category.lower()}/{idx}-{uuid4()}",
+                source="test",
+                title=f"{category} Engineer {idx}",
+                company=f"{category} Co {idx}",
+                category=category,
+                skills_required=skills,
+                skills_nice_to_have=[],
+                date_added="2024-01-01",
+            )
+        )
+    db.commit()
+
+
 def test_match_jobs_to_skills_returns_matches_with_limit(db):
     """match_jobs_to_skills filters by skills and respects limit."""
     from app.models.tables import JobRow
@@ -183,8 +205,9 @@ def test_retrieve_hybrid_recommendations_keyword_fallback_on_dims_mismatch(db):
         source="test",
         title="Python Engineer",
         company="Acme",
-        skills_required=["Python"],
-        skills_nice_to_have=[],
+        category="Backend",
+        skills_required=["Python", "Kafka"],
+        skills_nice_to_have=["AWS"],
         date_added="2024-01-01",
     )
     db.add(job)
@@ -224,6 +247,9 @@ def test_retrieve_hybrid_recommendations_keyword_fallback_on_dims_mismatch(db):
     assert result[0]["job"]["title"] == "Python Engineer"
     assert result[0]["job"]["id"] == str(job_id)
     assert result[0]["score"] == pytest.approx(0.7)
+    assert result[0]["explanation"]["sources"] == {"keyword": True, "semantic": False}
+    assert result[0]["explanation"]["retrieval_reason"] == "keyword_match"
+    assert result[0]["explanation"]["missing_skills"][:2] == ["Kafka", "AWS"]
     assert mock_keyword.call_count == 1
     assert mock_keyword.call_args.kwargs["index_name"] == "jobseeker_jobs_active"
 
@@ -343,3 +369,74 @@ def test_retrieve_hybrid_recommendations_uses_active_run_metadata_when_config_ch
     assert result[0]["score"] == pytest.approx(0.88)
     assert mock_hybrid.call_args.kwargs["embed_dims"] == 768
     assert mock_hybrid.call_args.kwargs["index_name"] == "jobseeker_jobs_active"
+
+
+def test_retrieve_hybrid_recommendations_includes_explanation_for_hybrid_hits(db):
+    """Hybrid recommendations expose explainability details for UI rendering."""
+    from app.models.tables import JobRow
+    from uuid import uuid4
+
+    _create_active_run(db, embed_dims=768)
+    _seed_category_jobs(db, category="Backend", skills=["Python", "Docker"], count=4)
+
+    job_id = uuid4()
+    job_url = f"https://example.com/job/{job_id}"
+    job = JobRow(
+        id=job_id,
+        url=job_url,
+        source="test",
+        title="Senior Backend Engineer",
+        company="Acme",
+        category="Backend",
+        skills_required=["Python", "Kafka"],
+        skills_nice_to_have=["Docker", "AWS"],
+        date_added="2024-01-01",
+    )
+    db.add(job)
+    db.commit()
+
+    import app.services.elasticsearch_service as es_mod
+    import app.services.embedding_service as embed_mod
+
+    with (
+        patch.object(embed_mod, "embed_text", return_value=[0.1] * 768),
+        patch.object(embed_mod, "is_ollama_model_available", return_value=True),
+        patch.object(es_mod, "is_available", return_value=True),
+        patch.object(
+            es_mod,
+            "search_hybrid",
+            return_value=[
+                {
+                    "job_id": str(job_id),
+                    "title": "Senior Backend Engineer",
+                    "company": "Acme",
+                    "url": job_url,
+                    "category": "Backend",
+                    "score": 0.88,
+                    "keyword_score": 4.2,
+                    "semantic_score": 0.92,
+                    "keyword_rank": 1,
+                    "semantic_rank": 2,
+                    "sources": {"keyword": True, "semantic": True},
+                }
+            ],
+        ),
+    ):
+        result = retrieve_hybrid_recommendations(
+            db,
+            {"Python", "Docker"},
+            top_k=5,
+            ai_config={"embed_source": "ollama", "embed_model": "all-minilm", "embed_dims": 768},
+        )
+
+    assert len(result) == 1
+    explanation = result[0]["explanation"]
+    assert explanation["retrieval_reason"] == "hybrid_match"
+    assert explanation["sources"] == {"keyword": True, "semantic": True}
+    assert explanation["matched_skills"] == ["Python", "Docker"]
+    assert explanation["missing_skills"][:2] == ["Kafka", "AWS"]
+    assert explanation["category_overlap"]["category"] == "Backend"
+    assert explanation["category_overlap"]["match_score"] > 0
+    assert explanation["keyword_rank"] == 1
+    assert explanation["semantic_rank"] == 2
+    assert "Matched 2 resume skills" in explanation["summary"]

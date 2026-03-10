@@ -1,4 +1,4 @@
-import { act, render, screen, waitFor } from "@testing-library/react";
+import { act, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { BrowserRouter } from "react-router-dom";
 import { vi } from "vitest";
@@ -483,6 +483,99 @@ describe("ResumeAnalysisPage", () => {
       firstRow.compareDocumentPosition(summaryHeading) &
         Node.DOCUMENT_POSITION_FOLLOWING,
     ).toBeTruthy();
+  });
+
+  it("shows inline recommendation reasons and expandable explanation details", async () => {
+    vi.mocked(api.embeddingStatus).mockResolvedValue({
+      available: true,
+      current_db_total: 100,
+      run: null,
+      active_run: {
+        id: "run-1",
+        status: "completed",
+        mode: "full",
+        unique_only: true,
+        embed_source: "ollama",
+        embed_model: "all-minilm",
+        embed_dims: 384,
+        db_total_snapshot: 100,
+        selection_total: 50,
+        target_total: 50,
+        processed: 50,
+        indexed: 50,
+        failed: 0,
+        index_alias: "jobseeker_jobs_active",
+        physical_index_name: "jobseeker_jobs_run_1",
+        celery_task_id: "celery-1",
+        error_message: null,
+        started_at: null,
+        finished_at: null,
+        updated_at: null,
+        activated_at: "2026-03-10T19:53:28Z",
+      },
+      active_index_name: "jobseeker_jobs_active",
+      active_indexed_documents: 50,
+      current_config_matches_active: true,
+      reindex_required: false,
+      legacy_indices: [],
+    });
+    vi.mocked(api.resumeAnalyze).mockResolvedValue({
+      extracted_skills: ["Python", "Docker"],
+      match_count: 0,
+      matches: [],
+      by_category: [],
+    });
+    vi.mocked(api.resumeRecommendations).mockResolvedValue({
+      status: "ok",
+      recommendations: [
+        {
+          job: {
+            id: "job-1",
+            title: "Senior Python Developer",
+            company: "Acme",
+            url: "https://example.com/job-1",
+            category: "Backend",
+          },
+          score: 0.9,
+          explanation: {
+            summary:
+              "Matched 2 resume skills through both skill overlap and semantic retrieval. category fit: Backend 82/100. top gaps: Kafka, AWS.",
+            matched_skills: ["Python", "Docker", "FastAPI"],
+            missing_skills: ["Kafka", "AWS"],
+            category_overlap: { category: "Backend", match_score: 82 },
+            sources: { keyword: true, semantic: true },
+            keyword_rank: 1,
+            semantic_rank: 2,
+            retrieval_reason: "hybrid_match",
+          },
+        },
+      ],
+    });
+
+    renderWithRouter(<ResumeAnalysisPage />);
+    await waitFor(() => expect(api.listCategories).toHaveBeenCalled());
+
+    const user = userEvent.setup();
+    const file = new File(["fake pdf content"], "resume.pdf", {
+      type: "application/pdf",
+    });
+    const input = document.getElementById("resume-upload") as HTMLInputElement;
+    await user.upload(input, file);
+
+    await waitFor(() => expect(api.resumeRecommendations).toHaveBeenCalled());
+    expect(
+      await screen.findByText(/Matched 2 resume skills through both skill overlap and semantic retrieval/i),
+    ).toBeInTheDocument();
+    const row = screen.getByTestId("recommendation-row");
+    expect(within(row).getByText("Hybrid")).toBeInTheDocument();
+    expect(within(row).getByText("Python")).toBeInTheDocument();
+
+    await user.click(screen.getByRole("button", { name: /why this matched/i }));
+
+    expect(await screen.findByTestId("recommendation-details")).toBeInTheDocument();
+    expect(screen.getByText(/Missing skills to strengthen this match/i)).toBeInTheDocument();
+    expect(screen.getByText("Kafka")).toBeInTheDocument();
+    expect(screen.getByText(/Search signals: keyword #1 · semantic #2/i)).toBeInTheDocument();
   });
 
   it("shows a no-active-index message when no active vector docs exist", async () => {

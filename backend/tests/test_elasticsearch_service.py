@@ -61,6 +61,41 @@ def test_search_similar_returns_hits():
     assert result[0]["score"] == 0.95
 
 
+def test_merge_rrf_preserves_keyword_and_semantic_provenance():
+    """RRF merge should keep source/rank metadata for recommendation explainability."""
+    merged = elasticsearch_service._merge_rrf(
+        [
+            {
+                "job_id": "abc",
+                "title": "Dev",
+                "company": "Acme",
+                "score": 5.0,
+                "keyword_score": 5.0,
+                "keyword_rank": 1,
+                "sources": {"keyword": True, "semantic": False},
+            }
+        ],
+        [
+            {
+                "job_id": "abc",
+                "title": "Dev",
+                "company": "Acme",
+                "score": 0.92,
+                "semantic_score": 0.92,
+                "semantic_rank": 2,
+                "sources": {"keyword": False, "semantic": True},
+            }
+        ],
+    )
+
+    assert len(merged) == 1
+    assert merged[0]["sources"] == {"keyword": True, "semantic": True}
+    assert merged[0]["keyword_rank"] == 1
+    assert merged[0]["semantic_rank"] == 1
+    assert merged[0]["keyword_score"] == 5.0
+    assert merged[0]["semantic_score"] == 0.92
+
+
 def test_bulk_index_jobs_returns_count(db):
     """bulk_index_jobs returns indexed count when mocks succeed."""
     from app.models.tables import JobRow
