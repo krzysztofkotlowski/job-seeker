@@ -162,6 +162,8 @@ Production stack: `deploy/docker-compose.prod.yml` (Postgres, Elasticsearch, Oll
 
 ### Local Development
 
+**Quick start (no Docker):** `./start.sh` runs backend + frontend. Requires Postgres running (e.g. `docker compose up postgres -d`).
+
 **Backend**
 
 ```bash
@@ -264,6 +266,7 @@ job-seeker/
 │       ├── prepare-ubuntu-server.sh
 │       └── migrate-db-to-server.sh
 ├── backend/
+│   ├── README.md
 │   ├── app/
 │   │   ├── main.py           # FastAPI app, CORS, routers
 │   │   ├── database.py       # SQLAlchemy engine, session
@@ -279,6 +282,7 @@ job-seeker/
 │   ├── Dockerfile
 │   └── tests/
 ├── frontend/
+│   ├── README.md
 │   ├── src/
 │   │   ├── App.tsx
 │   │   ├── api/              # client, types

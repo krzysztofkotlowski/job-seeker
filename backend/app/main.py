@@ -27,8 +27,7 @@ limiter = Limiter(key_func=get_remote_address, default_limits=[get_rate_limit()]
 app = FastAPI(
     title="Job Seeker Tracker",
     version="2.0.0",
-    description="API for tracking job offers from justjoin.it and nofluffjobs.com, "
-    "with skills analytics, salary normalization, and bulk import.",
+    description="Job Seeker Tracker API — jobs, skills, import, resume analysis, AI config. See root README.",
     docs_url="/api/v1/docs",
     redoc_url="/api/v1/redoc",
     openapi_url="/api/v1/openapi.json",

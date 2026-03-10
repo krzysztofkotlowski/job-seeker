@@ -1,1 +1,0 @@
-Full-stack job tracker: scrape JustJoin.it & NoFluffJobs, store in PostgreSQL, analyze with Elasticsearch RAG + Ollama embeddings. React 19 + FastAPI. Resume PDF analysis with keyword/semantic matching, AI summaries, optional Keycloak auth. Docker Compose, Celery, rate limiting.
