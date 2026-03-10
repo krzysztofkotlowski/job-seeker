@@ -10,8 +10,9 @@ A portfolio project for job seekers who want to aggregate positions from JustJoi
 
 - **Job list & detail** — Filter by status, seniority, category, work type, location; pagination; duplicate grouping
 - **Bulk import** — Scrape JustJoin.it & NoFluffJobs with Celery; resumable, per-source control
-- **Resume analysis** — PDF upload, skill extraction, keyword + semantic (RAG) matching, AI summaries
-- **AI configuration** — Switch Ollama/OpenAI; choose LLM and embedding models; inference metrics
+- **Resume analysis** — PDF upload, skill extraction, keyword + semantic (RAG) matching, AI summaries, hybrid job recommendations
+- **AI configuration** — Switch Ollama/OpenAI; choose LLM and embedding models; ensure-model (pull on demand); inference metrics
+- **Production deployment** — One-command deploy to Ubuntu via rsync + Docker Compose; ollama-init auto-pulls models
 - **Analytics dashboard** — Top skills, salary stats, charts (Recharts)
 - **Optional auth** — Keycloak; login for import, backup, saving resume analyses
 
@@ -138,6 +139,27 @@ ollama create jobseeker-advisor -f Modelfile
 
 **RAG (vector search):** When `RAG_ENABLED=true` and Elasticsearch is running, resume analysis uses semantic search to find additional job matches. After importing jobs, run `POST /api/v1/jobs/sync-embeddings` (or use the streaming endpoint for progress). Pull the embedding model: `docker compose exec ollama ollama pull nomic-embed-text`.
 
+**Resume recommendations:** After analysis, the app fetches hybrid search (RAG) job recommendations via `POST /api/v1/resume/recommendations`. Requires embeddings synced and RAG enabled.
+
+### Production Deployment
+
+Deploy to an Ubuntu server (e.g. home server) with one command:
+
+```bash
+./deploy/scripts/deploy.sh kkotlowski@hp-homeserver
+```
+
+The deploy script syncs the project via rsync, runs `docker compose up -d --build`, and ensures Ollama models (embedding + LLM) are pulled. See [deploy/README.md](deploy/README.md) for full documentation.
+
+| Script | Purpose |
+|--------|---------|
+| `deploy/scripts/deploy.sh` | Sync + start stack on remote server |
+| `deploy/scripts/test-and-deploy.sh` | Run tests locally, then deploy |
+| `deploy/scripts/prepare-ubuntu-server.sh` | First-time server setup (Docker, UFW) |
+| `deploy/scripts/migrate-db-to-server.sh` | Copy local DB to server |
+
+Production stack: `deploy/docker-compose.prod.yml` (Postgres, Elasticsearch, Ollama, backend, frontend). `ollama-init` service pulls embedding and LLM models before the backend starts.
+
 ### Local Development
 
 **Backend**
@@ -180,8 +202,8 @@ Runs backend + frontend tests, then `docker compose up --build -d`, then pulls t
 - **Analytics / dashboard** — Top skills, salary stats, charts (Recharts).
 - **Skills** — Detected skills per job; summary and match endpoints.
 - **Backup** — Download database as `.sql` (PostgreSQL `pg_dump`).
-- **Resume analysis** — Upload PDF, extract skills, compare to positions with match score and bar charts. Optional LLM summary (Ollama or OpenAI) for AI-generated career advice. RAG (vector search via Elasticsearch) enriches matches with semantic retrieval when enabled.
-- **AI configuration** — Switch between Ollama (local) and OpenAI; choose LLM and embedding models; temperature and token limits. Inference metrics (latency, tokens) per model in Settings.
+- **Resume analysis** — Upload PDF, extract skills, compare to positions with match score and bar charts. Optional LLM summary (Ollama or OpenAI) for AI-generated career advice. RAG (vector search via Elasticsearch) enriches matches with semantic retrieval. Hybrid job recommendations via `POST /resume/recommendations`.
+- **AI configuration** — Switch between Ollama (local) and OpenAI; choose LLM and embedding models; ensure-model (pull Ollama model on demand); temperature and token limits. Inference metrics (latency, tokens) per model in Settings.
 - **OpenAI support** — Use GPT-4o-mini or other models when API key is configured via Settings; embeddings from OpenAI or Ollama.
 - **Streaming embedding sync** — Progress feedback when indexing jobs for RAG.
 - **Keycloak auth** — Optional; app works without it. Login required for import, backup, and saving resume analyses when `KEYCLOAK_ENABLED=true`.
@@ -199,8 +221,8 @@ Runs backend + frontend tests, then `docker compose up --build -d`, then pulls t
 | Skills | `/api/v1/skills` | Summary, detected, match                                                                                                                                    |
 | Import | `/api/v1/import` | Status, start (all or per source), cancel                                                                                                                   |
 | Backup | `/api/v1/backup` | POST create → download .sql                                                                                                                                 |
-| Resume | `/api/v1/resume` | Analyze PDF, summarize, stream, history                                                                                                                     |
-| AI     | `/api/v1/ai`     | Models, config, validate-key, metrics                                                                                                                       |
+| Resume | `/api/v1/resume` | Analyze PDF, summarize, stream, history, **recommendations** (hybrid RAG)                                                                                   |
+| AI     | `/api/v1/ai`     | Models (provider param), **ensure-model** (pull Ollama model), config, validate-key, metrics                                                                |
 | Health | `/api/v1/health` | `{"status":"ok", "llm_available": bool, "database_available": bool, "elasticsearch_available": bool}`                                                       |
 
 OpenAPI: `/api/v1/docs`, `/api/v1/redoc`, `/api/v1/openapi.json`.
@@ -232,6 +254,15 @@ npm run test
 
 ```
 job-seeker/
+├── deploy/
+│   ├── docker-compose.prod.yml   # Production stack (Postgres, ES, Ollama, backend, frontend)
+│   ├── env.example.prod          # Production env template
+│   ├── README.md                 # Deployment docs
+│   └── scripts/
+│       ├── deploy.sh             # Sync + docker compose on remote
+│       ├── test-and-deploy.sh    # Test locally, then deploy
+│       ├── prepare-ubuntu-server.sh
+│       └── migrate-db-to-server.sh
 ├── backend/
 │   ├── app/
 │   │   ├── main.py           # FastAPI app, CORS, routers
