@@ -157,6 +157,10 @@ export function AIConfigContent() {
       }
       const updated = await api.aiUpdateConfig(payload);
       setConfig(updated);
+      setProvider((updated.provider as AIProvider) || provider);
+      setEmbedSource((updated.embed_source as AIEmbedSource) || embedSource);
+      setLlmModel(updated.llm_model || DEFAULT_LLM_MODEL);
+      setEmbedModel(updated.embed_model || embedModel);
       setOpenaiApiKey("");
       toast.showSuccess("AI config saved");
       if (provider === "ollama") {
@@ -226,6 +230,9 @@ export function AIConfigContent() {
       (m) =>
         m.name === embedModel || (embedBase && m.name?.startsWith(embedBase)),
     )?.name ?? embedModel;
+  const embedConfigDirty =
+    (config?.embed_model || "") !== (embedModel || "") ||
+    (config?.embed_source || "ollama") !== embedSource;
 
   if (loading) {
     return <LoadingSpinner />;
@@ -309,6 +316,11 @@ export function AIConfigContent() {
                   )}
                 </Select>
               </FormControl>
+              <Typography variant="body2" color="text.secondary">
+                {embedConfigDirty
+                  ? "Embedding dims will be re-resolved on save for the selected model."
+                  : `Resolved embedding dims: ${config?.embed_dims ?? "unknown"}`}
+              </Typography>
             </Box>
           </Paper>
         </>

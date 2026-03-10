@@ -8,11 +8,11 @@ import httpx
 log = logging.getLogger(__name__)
 
 EMBED_URL = os.environ.get("LLM_URL", "").rstrip("/")
-EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text")
+EMBED_MODEL = os.environ.get("EMBED_MODEL", "all-minilm")
 EMBED_TIMEOUT = int(os.environ.get("EMBED_TIMEOUT", "120"))
 
-# nomic-embed-text: 768 dims; text-embedding-3-small: 1536 dims
-EMBED_DIMS = int(os.environ.get("EMBED_DIMS", "768"))
+# all-minilm: 384 dims; text-embedding-3-small: 1536 dims
+EMBED_DIMS = int(os.environ.get("EMBED_DIMS", "384"))
 OPENAI_EMBED_MODEL = "text-embedding-3-small"
 OPENAI_EMBED_DIMS = 1536
 
@@ -71,17 +71,43 @@ def embed_batch_openai(texts: list[str], model: str | None = None, api_key: str 
 
 def is_available() -> bool:
     """Return True if embedding service is configured and reachable."""
+    return is_ollama_model_available(EMBED_MODEL)
+
+
+def is_ollama_model_available(model: str | None) -> bool:
+    """Return True if the requested Ollama embedding model is available."""
     if not EMBED_URL:
         return False
+    requested = (model or "").strip() or EMBED_MODEL
+    requested_base = requested.split(":", 1)[0]
     try:
         with httpx.Client(timeout=5) as client:
             resp = client.get(f"{EMBED_URL}/api/tags")
             if resp.status_code == 200:
                 models = resp.json().get("models") or []
-                return any(m.get("name", "").startswith(EMBED_MODEL) for m in models)
+                for item in models:
+                    name = str(item.get("name") or item.get("model") or "").strip()
+                    if not name:
+                        continue
+                    if name == requested or name.startswith(f"{requested}:"):
+                        return True
+                    if name.split(":", 1)[0] == requested_base:
+                        return True
     except Exception as e:
         log.debug("Embedding service check failed: %s", e)
     return False
+
+
+def get_ollama_embedding_dims(model: str | None) -> int | None:
+    """Return embedding dims for a specific Ollama model by running a tiny sample embed."""
+    requested = (model or "").strip() or EMBED_MODEL
+    vec = embed_text("dimension probe", model=requested, ai_config={"embed_source": "ollama"})
+    if not vec:
+        return None
+    try:
+        return len(vec)
+    except Exception:
+        return None
 
 
 def embed_text(

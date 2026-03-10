@@ -20,6 +20,17 @@ services:
     networks:
       - jobseeker
 
+  redis:
+    image: redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    networks:
+      - jobseeker
+
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.11.0
     environment:
@@ -43,13 +54,13 @@ services:
     deploy:
       resources:
         limits:
-          cpus: "6"
+          cpus: "${OLLAMA_CPU_LIMIT:-5}"
           memory: 10G
     environment:
       - OLLAMA_HOST=0.0.0.0
       - OLLAMA_MAX_LOADED_MODELS=1
       - OLLAMA_NUM_PARALLEL=1
-      - OLLAMA_NUM_THREAD=6
+      - OLLAMA_NUM_THREAD=${OLLAMA_NUM_THREAD:-5}
     volumes:
       - ollama_models:/root/.ollama
     healthcheck:
@@ -68,7 +79,8 @@ services:
     entrypoint: ["/bin/sh", "-c"]
     environment:
       - OLLAMA_HOST=http://ollama:11434
-      - EMBED_MODEL=${EMBED_MODEL:-nomic-embed-text}
+      - EMBED_MODEL=${EMBED_MODEL:-all-minilm}
+      - EMBED_DIMS=${EMBED_DIMS:-384}
       - LLM_MODEL=${LLM_MODEL:-qwen2.5:7b}
     command: >
       echo 'Waiting for Ollama...';
@@ -103,13 +115,19 @@ services:
       - LLM_SUMMARIZE_TIMEOUT=90
       - ELASTICSEARCH_URL=http://elasticsearch:9200
       - ES_TIMEOUT=30
-      - EMBED_MODEL=${EMBED_MODEL:-nomic-embed-text}
+      - EMBED_MODEL=${EMBED_MODEL:-all-minilm}
+      - EMBED_DIMS=${EMBED_DIMS:-384}
       - RAG_ENABLED=${RAG_ENABLED:-true}
       - CORS_ORIGINS=${CORS_ORIGINS:-*}
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - CELERY_ALWAYS_EAGER=0
     depends_on:
       postgres:
         condition: service_healthy
       elasticsearch:
+        condition: service_healthy
+      redis:
         condition: service_healthy
       ollama-init:
         condition: service_completed_successfully
@@ -129,6 +147,37 @@ services:
       - "80:80"
     depends_on:
       - backend
+    restart: unless-stopped
+    networks:
+      - jobseeker
+
+  worker:
+    build: ../backend
+    command: celery -A app.celery_app.celery_app worker --loglevel=info -Q jobseeker
+    environment:
+      - DATABASE_URL=postgresql://jobseeker:${POSTGRES_PASSWORD:-jobseeker}@postgres:5432/jobseeker
+      - LLM_URL=http://ollama:11434
+      - LLM_MODEL=${LLM_MODEL:-qwen2.5:7b}
+      - LLM_MAX_OUTPUT_TOKENS=${LLM_MAX_OUTPUT_TOKENS:-400}
+      - LLM_TIMEOUT=30
+      - LLM_SUMMARIZE_TIMEOUT=90
+      - ELASTICSEARCH_URL=http://elasticsearch:9200
+      - ES_TIMEOUT=30
+      - EMBED_MODEL=${EMBED_MODEL:-all-minilm}
+      - EMBED_DIMS=${EMBED_DIMS:-384}
+      - RAG_ENABLED=${RAG_ENABLED:-true}
+      - CELERY_BROKER_URL=redis://redis:6379/0
+      - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      - CELERY_ALWAYS_EAGER=0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      elasticsearch:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ollama-init:
+        condition: service_completed_successfully
     restart: unless-stopped
     networks:
       - jobseeker

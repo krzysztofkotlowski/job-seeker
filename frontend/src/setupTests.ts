@@ -13,5 +13,10 @@ globalThis.fetch = vi.fn((input: RequestInfo | URL) => {
   if (url.includes("/api/v1/auth/config")) {
     return Promise.resolve(new Response(JSON.stringify({ enabled: false })));
   }
+  if (url.includes("/api/v1/health")) {
+    return Promise.resolve(
+      new Response(JSON.stringify({ llm_available: false })),
+    );
+  }
   return originalFetch(input);
 }) as typeof fetch;

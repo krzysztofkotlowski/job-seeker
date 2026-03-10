@@ -134,9 +134,12 @@ def test_sync_embeddings_503_when_elasticsearch_unavailable(client: TestClient):
 
 
 def test_sync_embeddings_returns_indexed_when_available(client: TestClient, db):
-    """Sync-embeddings returns indexed count when ES is available."""
-    from app.models.tables import JobRow
+    """Sync-embeddings queues a persistent full run when ES is available."""
+    from app.models.tables import EmbeddingSyncRunRow, JobRow
     from uuid import uuid4
+
+    db.query(EmbeddingSyncRunRow).delete(synchronize_session=False)
+    db.commit()
 
     job = JobRow(
         id=uuid4(),
@@ -151,15 +154,200 @@ def test_sync_embeddings_returns_indexed_when_available(client: TestClient, db):
     db.add(job)
     db.commit()
 
+    fake_task = type("Task", (), {"id": "celery-1"})()
     with (
         patch("app.services.elasticsearch_service.is_available", return_value=True),
-        patch("app.services.elasticsearch_service.bulk_index_jobs", return_value=1),
+        patch("app.routers.jobs.run_embedding_sync.delay", return_value=fake_task),
     ):
         r = client.post("/api/v1/jobs/sync-embeddings")
     assert r.status_code == 200
     data = r.json()
-    assert data["indexed"] == 1
-    assert data["total"] >= 1
+    assert data["status"] == "queued"
+    assert data["mode"] == "full"
+    assert data["selection_total"] >= 1
+    assert data["target_total"] >= 1
+    assert data["celery_task_id"] == "celery-1"
+
+
+def test_sync_embeddings_unique_only_dedupes_by_company_title(client: TestClient, db):
+    """unique_only snapshots the same grouped selection as jobs list duplicate hiding."""
+    from datetime import datetime, timedelta, timezone
+    from uuid import uuid4
+    from app.models.tables import EmbeddingSyncRunRow, JobRow
+
+    # Isolate from prior tests because this suite shares one DB across cases.
+    db.query(EmbeddingSyncRunRow).delete(synchronize_session=False)
+    db.query(JobRow).delete(synchronize_session=False)
+    db.commit()
+
+    older = datetime.now(timezone.utc) - timedelta(days=1)
+    newer = datetime.now(timezone.utc)
+
+    same_a = JobRow(
+        id=uuid4(),
+        url=f"https://example.com/job/{uuid4()}",
+        source="test",
+        title="Backend Engineer",
+        company="Acme",
+        skills_required=["Python"],
+        skills_nice_to_have=[],
+        is_reposted=False,
+        date_added="2024-01-01",
+        created_at=older,
+    )
+    same_b = JobRow(
+        id=uuid4(),
+        url=f"https://example.com/job/{uuid4()}",
+        source="test",
+        title="Backend Engineer",
+        company="Acme",
+        skills_required=["Python"],
+        skills_nice_to_have=[],
+        is_reposted=False,
+        date_added="2024-01-01",
+        created_at=newer,
+    )
+    other = JobRow(
+        id=uuid4(),
+        url=f"https://example.com/job/{uuid4()}",
+        source="test",
+        title="Data Engineer",
+        company="Beta",
+        skills_required=["SQL"],
+        skills_nice_to_have=[],
+        is_reposted=False,
+        date_added="2024-01-01",
+        created_at=newer,
+    )
+    db.add_all([same_a, same_b, other])
+    db.commit()
+
+    fake_task = type("Task", (), {"id": "celery-2"})()
+    with (
+        patch("app.services.elasticsearch_service.is_available", return_value=True),
+        patch("app.routers.jobs.run_embedding_sync.delay", return_value=fake_task),
+    ):
+        r = client.post("/api/v1/jobs/sync-embeddings", params={"unique_only": True})
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["status"] == "queued"
+    assert data["mode"] == "full"
+    assert data["unique_only"] is True
+    assert data["selection_total"] == 2
+    assert data["target_total"] == 2
+
+
+def test_sync_embeddings_normalizes_stale_ollama_dims_before_queueing(client: TestClient, db):
+    """Starting sync should heal stale Ollama embed_dims before queueing the run."""
+    from uuid import uuid4
+
+    from app.models.tables import AIConfigRow, EmbeddingSyncRunRow, JobRow
+
+    db.query(EmbeddingSyncRunRow).delete(synchronize_session=False)
+    db.query(AIConfigRow).delete(synchronize_session=False)
+    db.commit()
+
+    db.add(
+        AIConfigRow(
+            id=1,
+            provider="ollama",
+            embed_source="ollama",
+            llm_model="qwen2.5:7b",
+            embed_model="nomic-embed-text",
+            embed_dims=384,
+            temperature=0.3,
+            max_output_tokens=1024,
+        )
+    )
+    db.add(
+        JobRow(
+            id=uuid4(),
+            url=f"https://example.com/job/{uuid4()}",
+            source="test",
+            title="Backend Engineer",
+            company="Acme",
+            skills_required=["Python"],
+            skills_nice_to_have=[],
+            date_added="2024-01-01",
+        )
+    )
+    db.commit()
+
+    fake_task = type("Task", (), {"id": "celery-3"})()
+    with (
+        patch("app.services.elasticsearch_service.is_available", return_value=True),
+        patch("app.services.ai_config_service.get_ollama_embedding_dims", return_value=768),
+        patch("app.routers.jobs.run_embedding_sync.delay", return_value=fake_task),
+    ):
+        r = client.post("/api/v1/jobs/sync-embeddings", params={"mode": "full"})
+
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["embed_model"] == "nomic-embed-text"
+    assert data["embed_dims"] == 768
+
+    db.refresh(db.query(AIConfigRow).filter(AIConfigRow.id == 1).one())
+    assert db.query(AIConfigRow).filter(AIConfigRow.id == 1).one().embed_dims == 768
+
+
+def test_embedding_status_returns_persistent_run_progress(client: TestClient, db):
+    """embedding-status should report DB-backed run progress and active-index metadata."""
+    from datetime import datetime, timezone
+    from uuid import uuid4
+    from app.models.tables import EmbeddingSyncRunRow, JobRow
+
+    db.query(EmbeddingSyncRunRow).delete(synchronize_session=False)
+    db.commit()
+
+    job = JobRow(
+        id=uuid4(),
+        url=f"https://example.com/job/{uuid4()}",
+        source="test",
+        title="Platform Engineer",
+        company="Acme",
+        skills_required=["Python"],
+        skills_nice_to_have=[],
+        date_added="2024-01-01",
+    )
+    db.add(job)
+    run = EmbeddingSyncRunRow(
+        id=uuid4(),
+        status="running",
+        mode="full",
+        unique_only=True,
+        embed_source="ollama",
+        embed_model="all-minilm",
+        embed_dims=384,
+        db_total_snapshot=1,
+        selection_total=11783,
+        target_total=11783,
+        processed=96,
+        indexed=96,
+        failed=0,
+        index_alias="jobseeker_jobs_active",
+        physical_index_name="jobseeker_jobs_run_deadbeef",
+        started_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+    )
+    db.add(run)
+    db.commit()
+
+    with (
+        patch("app.services.embedding_sync_service.es_available", return_value=True),
+        patch("app.services.embedding_sync_service.list_legacy_job_indices", return_value=[]),
+        patch("app.services.embedding_sync_service.count_documents", return_value=0),
+    ):
+        r = client.get("/api/v1/jobs/embedding-status")
+
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["available"] is True
+    assert data["current_db_total"] >= 1
+    assert data["active_indexed_documents"] == 0
+    assert data["run"]["status"] == "running"
+    assert data["run"]["processed"] == 96
+    assert data["run"]["target_total"] == 11783
+    assert data["run"]["unique_only"] is True
 
 
 def test_enrich_batch_missing_ids(client: TestClient):
@@ -205,4 +393,3 @@ def test_list_top_skills(client: TestClient):
     data = r.json()
     assert isinstance(data, list)
     assert len(data) <= 10
-

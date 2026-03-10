@@ -21,6 +21,116 @@ def _normalize(s: str) -> str:
     return (s or "").strip().lower()
 
 
+def _keyword_fallback_hits(
+    *,
+    query_text: str,
+    top_k: int,
+    index_name: str | None,
+) -> list[dict]:
+    """Run Elasticsearch keyword search against the active managed index only."""
+    try:
+        from app.services.elasticsearch_service import search_keyword
+    except ImportError:
+        return []
+    if not index_name:
+        return []
+    hits = search_keyword(query_text=query_text, top_k=top_k, index_name=index_name)
+    if hits:
+        log.info(
+            "Resume recommendations: keyword fallback hits=%d (index=%s)",
+            len(hits),
+            index_name,
+        )
+    return hits
+
+
+def _hydrate_hits_to_jobs(db: Session, hits: list[dict]) -> list[dict]:
+    """Resolve Elasticsearch hits back to DB jobs, falling back to source fields when missing."""
+    results: list[dict] = []
+    for h in hits:
+        job_id = h.get("job_id")
+        if not job_id:
+            continue
+        try:
+            uid = UUID(job_id) if isinstance(job_id, str) else job_id
+        except (ValueError, TypeError):
+            continue
+        row = db.query(JobRow).filter(JobRow.id == uid).first()
+        if row:
+            job_dict = row.to_dict()
+        else:
+            job_dict = {
+                "id": job_id,
+                "title": h.get("title", ""),
+                "company": h.get("company", ""),
+                "url": h.get("url", ""),
+                "category": h.get("category", ""),
+            }
+        results.append({"job": job_dict, "score": float(h.get("score", 0))})
+    return results
+
+
+def _active_embedding_context(db: Session, ai_config: dict | None = None) -> dict:
+    """Resolve the active managed recommendation source and whether it is queryable."""
+    try:
+        from app.services.embedding_service import is_ollama_model_available
+        from app.services.embedding_sync_service import resolve_active_recommendation_source
+    except ImportError:
+        return {
+            "status": "reindex_required",
+            "message": "Embedding sync services are unavailable.",
+            "active_run": None,
+            "active_run_meta": None,
+            "active_index_name": None,
+            "config_matches_active": False,
+        }
+
+    resolved = resolve_active_recommendation_source(db)
+    if resolved.get("status") != "ok":
+        return resolved
+
+    active_run = resolved["active_run"]
+    current_cfg = ai_config or {}
+    if active_run.embed_source == "openai":
+        api_key = (current_cfg.get("openai_api_key") or "").strip()
+        if not api_key:
+            resolved.update(
+                {
+                    "status": "active_embedding_unavailable",
+                    "message": (
+                        "The active recommendation index was built with OpenAI embeddings, "
+                        "but no OpenAI API key is configured for query embeddings."
+                    ),
+                }
+            )
+            return resolved
+        resolved["embed_ai_config"] = {
+            "embed_source": "openai",
+            "openai_api_key": api_key,
+            "embed_dims": int(active_run.embed_dims or 0),
+        }
+        resolved["embed_model"] = active_run.embed_model
+        return resolved
+
+    if not is_ollama_model_available(active_run.embed_model):
+        resolved.update(
+            {
+                "status": "active_embedding_unavailable",
+                "message": (
+                    f"The active embedding model '{active_run.embed_model}' is not available in Ollama."
+                ),
+            }
+        )
+        return resolved
+
+    resolved["embed_ai_config"] = {
+        "embed_source": "ollama",
+        "embed_dims": int(active_run.embed_dims or 0),
+    }
+    resolved["embed_model"] = active_run.embed_model
+    return resolved
+
+
 def match_jobs_to_skills(
     db: Session,
     resume_skills: set[str],
@@ -165,11 +275,38 @@ def retrieve_semantic_matches(
     query_text = " ".join(sorted(extracted_skills)) if extracted_skills else ""
     if not query_text.strip():
         return []
-    embedding = embed_text(query_text, model=embed_model, ai_config=ai_config)
+    resolved = _active_embedding_context(db, ai_config=ai_config)
+    if resolved.get("status") != "ok":
+        log.info(
+            "Resume semantic matches skipped: status=%s message=%s",
+            resolved.get("status"),
+            resolved.get("message"),
+        )
+        return []
+    active_run = resolved["active_run"]
+    active_index_name = resolved.get("active_index_name")
+    embedding = embed_text(
+        query_text,
+        model=resolved.get("embed_model") or embed_model,
+        ai_config=resolved.get("embed_ai_config"),
+    )
     if not embedding:
         return []
-    embed_dims = (ai_config or {}).get("embed_dims")
-    hits = search_similar(query_embedding=embedding, top_k=top_k, embed_dims=embed_dims)
+    if len(embedding) != int(active_run.embed_dims or 0):
+        log.warning(
+            "Resume semantic matches: active run dims mismatch (run_id=%s, expected=%s, query=%s, index=%s)",
+            active_run.id,
+            active_run.embed_dims,
+            len(embedding),
+            active_index_name,
+        )
+        return []
+    hits = search_similar(
+        query_embedding=embedding,
+        top_k=top_k,
+        embed_dims=int(active_run.embed_dims or 0),
+        index_name=active_index_name,
+    )
     if not hits:
         return []
     results = []
@@ -193,6 +330,198 @@ def retrieve_semantic_matches(
     return results
 
 
+def retrieve_hybrid_recommendations_response(
+    db: Session,
+    extracted_skills: set[str],
+    top_k: int = 10,
+    embed_model: str | None = None,
+    ai_config: dict | None = None,
+) -> dict:
+    """
+    RAG: query the active managed recommendation index, not config-derived legacy indices.
+    Returns a structured response with status, message, and recommendation list.
+    """
+    try:
+        from app.services.embedding_service import embed_text
+        from app.services.elasticsearch_service import is_available, search_hybrid
+    except ImportError:
+        log.warning("Resume recommendations: RAG modules not available")
+        return {
+            "status": "reindex_required",
+            "message": "Recommendation services are unavailable.",
+            "recommendations": [],
+            "active_run": None,
+            "config_matches_active": False,
+        }
+
+    if not is_available():
+        log.info("Resume recommendations: Elasticsearch unavailable")
+        return {
+            "status": "unavailable",
+            "message": "Elasticsearch is unavailable.",
+            "recommendations": [],
+            "active_run": None,
+            "config_matches_active": False,
+        }
+    query_text = " ".join(sorted(extracted_skills)) if extracted_skills else ""
+    if not query_text.strip():
+        return {
+            "status": "ok",
+            "message": None,
+            "recommendations": [],
+            "active_run": None,
+            "config_matches_active": False,
+        }
+
+    resolved = _active_embedding_context(db, ai_config=ai_config)
+    active_run = resolved.get("active_run")
+    active_run_meta = resolved.get("active_run_meta")
+    active_index_name = resolved.get("active_index_name")
+    status = str(resolved.get("status") or "ok")
+    log.info(
+        "Resume recommendations: status=%s active_run_id=%s index=%s unique_only=%s model=%s dims=%s config_matches_active=%s query_len=%d",
+        status,
+        active_run_meta.get("id") if active_run_meta else None,
+        active_index_name,
+        active_run_meta.get("unique_only") if active_run_meta else None,
+        active_run_meta.get("embed_model") if active_run_meta else None,
+        active_run_meta.get("embed_dims") if active_run_meta else None,
+        resolved.get("config_matches_active"),
+        len(query_text),
+    )
+
+    if status != "ok":
+        fallback_hits = _keyword_fallback_hits(
+            query_text=query_text,
+            top_k=top_k,
+            index_name=active_index_name,
+        )
+        if fallback_hits:
+            return {
+                "status": "fallback",
+                "message": resolved.get("message"),
+                "recommendations": _hydrate_hits_to_jobs(db, fallback_hits),
+                "active_run": active_run_meta,
+                "config_matches_active": bool(resolved.get("config_matches_active")),
+            }
+        return {
+            "status": status,
+            "message": resolved.get("message"),
+            "recommendations": [],
+            "active_run": active_run_meta,
+            "config_matches_active": bool(resolved.get("config_matches_active")),
+        }
+
+    embedding = embed_text(
+        query_text,
+        model=resolved.get("embed_model") or embed_model,
+        ai_config=resolved.get("embed_ai_config"),
+    )
+    if not embedding:
+        log.warning("Resume recommendations: query embedding failed for active index %s", active_index_name)
+        fallback_hits = _keyword_fallback_hits(
+            query_text=query_text,
+            top_k=top_k,
+            index_name=active_index_name,
+        )
+        if fallback_hits:
+            return {
+                "status": "fallback",
+                "message": "Embedding query failed; using keyword fallback on the active index.",
+                "recommendations": _hydrate_hits_to_jobs(db, fallback_hits),
+                "active_run": active_run_meta,
+                "config_matches_active": bool(resolved.get("config_matches_active")),
+            }
+        return {
+            "status": "active_embedding_unavailable",
+            "message": "Embedding query failed for the active recommendation index.",
+            "recommendations": [],
+            "active_run": active_run_meta,
+            "config_matches_active": bool(resolved.get("config_matches_active")),
+        }
+
+    expected_dims = int(active_run.embed_dims or 0)
+    if len(embedding) != expected_dims:
+        log.warning(
+            "Resume recommendations: active run dims mismatch (run_id=%s, expected=%d, query=%d, index=%s, config_matches_active=%s)",
+            active_run.id,
+            expected_dims,
+            len(embedding),
+            active_index_name,
+            resolved.get("config_matches_active"),
+        )
+        fallback_hits = _keyword_fallback_hits(
+            query_text=query_text,
+            top_k=top_k,
+            index_name=active_index_name,
+        )
+        if fallback_hits:
+            return {
+                "status": "fallback",
+                "message": "Active embedding dimensions do not match the query model; using keyword fallback on the active index.",
+                "recommendations": _hydrate_hits_to_jobs(db, fallback_hits),
+                "active_run": active_run_meta,
+                "config_matches_active": bool(resolved.get("config_matches_active")),
+            }
+        return {
+            "status": "reindex_required",
+            "message": "The active recommendation index uses a different embedding shape. Run a full rebuild.",
+            "recommendations": [],
+            "active_run": active_run_meta,
+            "config_matches_active": bool(resolved.get("config_matches_active")),
+        }
+
+    hits = search_hybrid(
+        query_text=query_text,
+        query_embedding=embedding,
+        top_k=top_k,
+        embed_dims=expected_dims,
+        index_name=active_index_name,
+    )
+    if not hits:
+        fallback_hits = _keyword_fallback_hits(
+            query_text=query_text,
+            top_k=top_k,
+            index_name=active_index_name,
+        )
+        if fallback_hits:
+            log.warning(
+                "Resume recommendations: hybrid empty on active index %s; using keyword fallback",
+                active_index_name,
+            )
+            return {
+                "status": "fallback",
+                "message": "Hybrid search returned no vector hits; using keyword fallback on the active index.",
+                "recommendations": _hydrate_hits_to_jobs(db, fallback_hits),
+                "active_run": active_run_meta,
+                "config_matches_active": bool(resolved.get("config_matches_active")),
+            }
+        if not fallback_hits:
+            log.info(
+                "Resume recommendations: no hits after hybrid+fallback (index=%s, embed_dims=%s, skills=%d)",
+                active_index_name,
+                expected_dims,
+                len(extracted_skills),
+            )
+            return {
+                "status": "ok",
+                "message": None,
+                "recommendations": [],
+                "active_run": active_run_meta,
+                "config_matches_active": bool(resolved.get("config_matches_active")),
+            }
+
+    results = _hydrate_hits_to_jobs(db, hits)
+    log.info("Resume recommendations: hits=%d, kept=%d", len(hits), len(results))
+    return {
+        "status": "ok",
+        "message": None,
+        "recommendations": results,
+        "active_run": active_run_meta,
+        "config_matches_active": bool(resolved.get("config_matches_active")),
+    }
+
+
 def retrieve_hybrid_recommendations(
     db: Session,
     extracted_skills: set[str],
@@ -200,50 +529,14 @@ def retrieve_hybrid_recommendations(
     embed_model: str | None = None,
     ai_config: dict | None = None,
 ) -> list[dict]:
-    """
-    RAG: hybrid search (vector + keyword) in Elasticsearch, return job recommendations with URLs from DB.
-    Returns [] if RAG unavailable (ES or embeddings disabled).
-    """
-    try:
-        from app.services.embedding_service import embed_text
-        from app.services.elasticsearch_service import is_available, search_hybrid
-    except ImportError:
-        return []
-
-    if not is_available():
-        return []
-    query_text = " ".join(sorted(extracted_skills)) if extracted_skills else ""
-    if not query_text.strip():
-        return []
-    embedding = embed_text(query_text, model=embed_model, ai_config=ai_config)
-    if not embedding:
-        return []
-    embed_dims = (ai_config or {}).get("embed_dims")
-    hits = search_hybrid(
-        query_text=query_text,
-        query_embedding=embedding,
+    """Backward-compatible wrapper returning only recommendation hits."""
+    return retrieve_hybrid_recommendations_response(
+        db,
+        extracted_skills,
         top_k=top_k,
-        embed_dims=embed_dims,
-    )
-    if not hits:
-        return []
-    results = []
-    for h in hits:
-        job_id = h.get("job_id")
-        if not job_id:
-            continue
-        try:
-            uid = UUID(job_id) if isinstance(job_id, str) else job_id
-        except (ValueError, TypeError):
-            continue
-        row = db.query(JobRow).filter(JobRow.id == uid).first()
-        if row:
-            job_dict = row.to_dict()
-            results.append({
-                "job": job_dict,
-                "score": float(h.get("score", 0)),
-            })
-    return results
+        embed_model=embed_model,
+        ai_config=ai_config,
+    ).get("recommendations", [])
 
 
 def merge_keyword_and_semantic_matches(

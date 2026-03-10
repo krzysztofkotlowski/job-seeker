@@ -38,8 +38,11 @@ def skills_summary(
         nice_q = nice_q.filter(JobRow.category == category)
     nice_all = nice_q.group_by(literal_column("skill")).order_by(func.count().desc()).all()
 
-    required_map = {r[0]: r[1] for r in req_all}
-    nice_map = {r[0]: r[1] for r in nice_all}
+    def _valid_skill(s) -> bool:
+        return s is not None and str(s).strip() != ""
+
+    required_map = {r[0]: r[1] for r in req_all if _valid_skill(r[0])}
+    nice_map = {r[0]: r[1] for r in nice_all if _valid_skill(r[0])}
     all_skills: dict[str, int] = {}
     for s, c in required_map.items():
         all_skills[s] = all_skills.get(s, 0) + c
@@ -47,10 +50,11 @@ def skills_summary(
         all_skills[s] = all_skills.get(s, 0) + c
 
     sorted_skills = sorted(all_skills.items(), key=lambda x: x[1], reverse=True)
+    sorted_skills = [(s, c) for s, c in sorted_skills if _valid_skill(s)]
 
     if search:
         pattern = search.lower()
-        sorted_skills = [(s, c) for s, c in sorted_skills if pattern in s.lower()]
+        sorted_skills = [(s, c) for s, c in sorted_skills if pattern in str(s).lower()]
 
     total_skills = len(sorted_skills)
 
@@ -65,14 +69,18 @@ def skills_summary(
         "per_page": per_page,
         "pages": pages,
         "top_skills": [
-            {"skill": s, "count": c, "required_count": required_map.get(s, 0)}
+            {"skill": str(s).strip(), "count": c, "required_count": required_map.get(s, 0)}
             for s, c in page_skills
         ],
         "required_skills": [
-            {"skill": s, "count": c} for s, c in req_all[:top]
+            {"skill": str(s).strip(), "count": c}
+            for s, c in req_all[:top]
+            if _valid_skill(s)
         ],
         "nice_to_have_skills": [
-            {"skill": s, "count": c} for s, c in nice_all[:top]
+            {"skill": str(s).strip(), "count": c}
+            for s, c in nice_all[:top]
+            if _valid_skill(s)
         ],
     }
 

@@ -1,0 +1,227 @@
+#!/usr/bin/env bash
+# Test locally, then deploy only application services on remote.
+#
+# Goal: avoid unnecessary PostgreSQL/Elasticsearch redeployments.
+# - Existing DB/search/broker containers are only started (not recreated).
+# - Only backend/frontend/worker are rebuilt/redeployed.
+#
+# Usage:
+#   ./deploy/scripts/test-and-deploy-app-only.sh [SERVER]
+#
+# Environment:
+#   DEPLOY_SERVER  - Default SSH target (default: kkotlowski@hp-homeserver)
+#   DEPLOY_PATH    - Remote path (default: /opt/jobseeker)
+#   RUN_TESTS      - 1 (default) to run local tests, 0 to skip
+#   TEST_DATABASE_URL - Optional backend test DB URL
+
+set -euo pipefail
+
+readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+readonly PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
+readonly DEFAULT_SERVER="${DEPLOY_SERVER:-kkotlowski@hp-homeserver}"
+readonly DEFAULT_PATH="${DEPLOY_PATH:-/opt/jobseeker}"
+readonly COMPOSE_FILE="deploy/docker-compose.prod.yml"
+
+SERVER="${1:-${DEFAULT_SERVER}}"
+REMOTE_PATH="${DEPLOY_PATH:-${DEFAULT_PATH}}"
+RUN_TESTS="${RUN_TESTS:-1}"
+
+log() { echo "[test-deploy-app-only]" "$@"; }
+err() { echo "[test-deploy-app-only] ERROR:" "$@" >&2; }
+
+wait_local_postgres() {
+  for _ in {1..30}; do
+    if docker compose exec -T postgres pg_isready -U jobseeker -q 2>/dev/null; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+wait_local_elasticsearch() {
+  for _ in {1..30}; do
+    if curl -sf http://localhost:9200/_cluster/health >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 2
+  done
+  return 1
+}
+
+run_local_tests() {
+  if [[ "${RUN_TESTS}" != "1" ]]; then
+    log "RUN_TESTS=0 -> skipping local tests."
+    return 0
+  fi
+
+  log "Preparing local test services..."
+  docker compose up -d postgres elasticsearch >/dev/null
+
+  if ! wait_local_postgres; then
+    err "Local Postgres did not become ready."
+    exit 1
+  fi
+  if ! wait_local_elasticsearch; then
+    err "Local Elasticsearch did not become ready."
+    exit 1
+  fi
+
+  docker compose exec -T postgres psql -U jobseeker -c "CREATE DATABASE jobseeker_test" >/dev/null 2>&1 || true
+
+  log "Running backend lint/tests..."
+  cd "${PROJECT_ROOT}/backend"
+  pip install -q -r requirements.txt
+  ruff check app
+  export DATABASE_URL="${TEST_DATABASE_URL:-postgresql://jobseeker:jobseeker@localhost:5432/jobseeker_test}"
+  python3 -m pytest tests/ -v --tb=short
+
+  log "Running frontend lint/tests..."
+  cd "${PROJECT_ROOT}/frontend"
+  npm run lint
+  npm run test -- --run
+
+  cd "${PROJECT_ROOT}"
+}
+
+sync_project() {
+  log "Syncing files to ${SERVER}:${REMOTE_PATH}..."
+  rsync -avz --delete \
+    --exclude '.git' \
+    --exclude 'node_modules' \
+    --exclude '.venv' \
+    --exclude 'venv' \
+    --exclude '__pycache__' \
+    --exclude 'pgdata' \
+    --exclude '*.pyc' \
+    --exclude '.coverage' \
+    --exclude 'dist' \
+    --exclude '.env' \
+    "${PROJECT_ROOT}/" "${SERVER}:${REMOTE_PATH}/"
+}
+
+ensure_remote_env() {
+  if ! ssh "${SERVER}" "test -f '${REMOTE_PATH}/.env'"; then
+    log "Creating remote .env from template..."
+    ssh "${SERVER}" "cp '${REMOTE_PATH}/deploy/env.example.prod' '${REMOTE_PATH}/.env'"
+    log "Edit ${REMOTE_PATH}/.env on server and set secure POSTGRES_PASSWORD."
+  fi
+}
+
+ensure_remote_service_running_without_recreate() {
+  local service="$1"
+  local exists=""
+  exists="$(ssh "${SERVER}" "cd '${REMOTE_PATH}' && docker compose -f '${COMPOSE_FILE}' ps -a -q '${service}'" || true)"
+  if [[ -z "${exists}" ]]; then
+    log "Remote ${service} container missing -> creating it once."
+    ssh "${SERVER}" "cd '${REMOTE_PATH}' && docker compose -f '${COMPOSE_FILE}' up -d '${service}'"
+  else
+    ssh "${SERVER}" "cd '${REMOTE_PATH}' && docker compose -f '${COMPOSE_FILE}' start '${service}' >/dev/null 2>&1 || true"
+  fi
+}
+
+deploy_app_only() {
+  # Do not redeploy DB/search unless missing.
+  ensure_remote_service_running_without_recreate postgres
+  ensure_remote_service_running_without_recreate elasticsearch
+  ensure_remote_service_running_without_recreate redis
+  ensure_remote_service_running_without_recreate ollama
+
+  log "Deploying app services only (backend/frontend/worker, no DB/search rebuild)..."
+  ssh "${SERVER}" "cd '${REMOTE_PATH}' && docker compose -f '${COMPOSE_FILE}' up -d --build --no-deps backend frontend worker"
+}
+
+ensure_remote_models() {
+  log "Ensuring Ollama models..."
+
+  remote_has_model() {
+    local requested="$1"
+    local base="${requested%%:*}"
+    ssh "${SERVER}" "cd '${REMOTE_PATH}' && docker compose -f '${COMPOSE_FILE}' exec -T ollama ollama list" 2>/dev/null \
+      | awk 'NR>1 {print $1}' \
+      | grep -E "^${requested}(:|$)|^${base}:" >/dev/null 2>&1
+  }
+
+  for model in all-minilm qwen2.5:7b; do
+    if remote_has_model "${model}"; then
+      log "Model already present: ${model}"
+      continue
+    fi
+
+    log "Model missing, pulling: ${model}"
+    local ok=0
+    for i in $(seq 1 20); do
+      if ssh "${SERVER}" "cd '${REMOTE_PATH}' && docker compose -f '${COMPOSE_FILE}' exec -T ollama ollama pull '${model}'" >/dev/null 2>&1; then
+        ok=1
+        break
+      fi
+      sleep 3
+      if [[ "${i}" -eq 1 ]]; then
+        log "Waiting for ollama to be ready for model pull (${model})..."
+      fi
+    done
+    if [[ "${ok}" -ne 1 ]]; then
+      err "Could not pull model ${model} on remote."
+      exit 1
+    fi
+  done
+}
+
+check_remote_backend_health_once() {
+  # Preferred: through frontend reverse proxy (port 80 published in prod).
+  if ssh "${SERVER}" "curl -sf http://127.0.0.1/api/v1/health >/dev/null"; then
+    return 0
+  fi
+  # Fallback: inside backend container.
+  ssh "${SERVER}" \
+    "cd '${REMOTE_PATH}' && docker compose -f '${COMPOSE_FILE}' exec -T backend python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5)\"" \
+    >/dev/null 2>&1
+}
+
+verify_remote_health() {
+  log "Verifying remote backend health..."
+  for i in $(seq 1 60); do
+    if check_remote_backend_health_once; then
+      log "Remote backend health is OK."
+      return 0
+    fi
+    if [[ "${i}" -eq 1 ]]; then
+      log "Backend not ready yet; waiting..."
+    fi
+    sleep 3
+  done
+
+  err "Remote backend health check failed after retries."
+  log "Diagnostics: docker compose ps"
+  ssh "${SERVER}" "cd '${REMOTE_PATH}' && docker compose -f '${COMPOSE_FILE}' ps" || true
+  log "Diagnostics: backend logs (last 120 lines)"
+  ssh "${SERVER}" "cd '${REMOTE_PATH}' && docker compose -f '${COMPOSE_FILE}' logs --tail=120 backend" || true
+  exit 1
+}
+
+verify_frontend_health() {
+  log "Verifying remote frontend health..."
+  for _ in $(seq 1 30); do
+    if ssh "${SERVER}" "curl -sf http://127.0.0.1/ >/dev/null"; then
+      log "Remote frontend health is OK."
+      return 0
+    fi
+    sleep 2
+  done
+  err "Remote frontend health check failed."
+  exit 1
+}
+
+main() {
+  cd "${PROJECT_ROOT}"
+  run_local_tests
+  sync_project
+  ensure_remote_env
+  deploy_app_only
+  ensure_remote_models
+  verify_remote_health
+  verify_frontend_health
+  log "Done. App deploy completed without unnecessary DB/search redeployment."
+}
+
+main "$@"

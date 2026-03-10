@@ -1,7 +1,6 @@
 """Test data factories."""
 
 import uuid
-from datetime import datetime, timezone
 
 from app.models.tables import JobRow, UserRow
 

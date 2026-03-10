@@ -340,6 +340,8 @@ export function JobListPage() {
           display: "flex",
           alignItems: "center",
           justifyContent: "space-between",
+          flexWrap: "wrap",
+          gap: 1,
         }}
       >
         <Typography variant="body2" color="text.secondary">
@@ -536,7 +538,8 @@ export function JobListPage() {
               sx={{
                 display: "grid",
                 gridTemplateColumns: {
-                  xs: "1fr 1fr",
+                  xs: "1fr",
+                  sm: "1fr 1fr",
                   md: "1fr 1fr 1fr 1fr",
                   lg: "repeat(4, 1fr)",
                 },
@@ -613,16 +616,16 @@ export function JobListPage() {
                   { value: "", label: "All Locations" },
                   ...locations.map((loc) => ({ value: loc, label: loc })),
                 ]}
-                sx={{ minWidth: 140 }}
+                sx={{ minWidth: { xs: 0, sm: 140 } }}
               />
               <FilterSelect
                 label="Reposted"
                 value={reposted}
                 onChange={(v) => setFilter("is_reposted", v)}
                 options={REPOSTED_OPTIONS}
-                sx={{ minWidth: 130 }}
+                sx={{ minWidth: { xs: 0, sm: 130 } }}
               />
-              <Box sx={{ flex: 1, minWidth: 200 }}>
+              <Box sx={{ flex: 1, minWidth: { xs: 0, sm: 200 } }}>
                 <Autocomplete
                   size="small"
                   multiple
@@ -669,7 +672,7 @@ export function JobListPage() {
                 }
                 sx={{ mt: 0.5 }}
               />
-              <Box sx={{ ml: "auto", minWidth: 180 }}>
+              <Box sx={{ ml: "auto", minWidth: { xs: 0, sm: 180 } }}>
                 <FilterSelect
                   label="Sort By"
                   value={sortBy}
@@ -755,6 +758,7 @@ export function JobListPage() {
                       <Box
                         sx={{
                           display: "flex",
+                          flexDirection: { xs: "column", sm: "row" },
                           justifyContent: "space-between",
                           gap: 2,
                         }}
@@ -764,6 +768,7 @@ export function JobListPage() {
                             sx={{
                               display: "flex",
                               alignItems: "center",
+                              flexWrap: "wrap",
                               gap: 1,
                               mb: 0.5,
                             }}
@@ -775,7 +780,8 @@ export function JobListPage() {
                                 fontSize: "1.1rem",
                                 overflow: "hidden",
                                 textOverflow: "ellipsis",
-                                whiteSpace: "nowrap",
+                                whiteSpace: { xs: "normal", sm: "nowrap" },
+                                wordBreak: { xs: "break-word", sm: "normal" },
                               }}
                             >
                               {job.title}
@@ -906,7 +912,8 @@ export function JobListPage() {
                           sx={{
                             flexShrink: 0,
                             display: "flex",
-                            alignItems: "center",
+                            flexDirection: { xs: "row", sm: "row" },
+                            alignItems: { xs: "flex-start", sm: "center" },
                             gap: 1.5,
                           }}
                         >

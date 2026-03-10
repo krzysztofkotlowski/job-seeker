@@ -5,9 +5,10 @@ import {
   Route,
   NavLink,
   Navigate,
+  useLocation,
 } from "react-router-dom";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { ThemeProvider, createTheme, CssBaseline } from "@mui/material";
+import { ThemeProvider, createTheme, CssBaseline, useTheme, useMediaQuery } from "@mui/material";
 import AppBar from "@mui/material/AppBar";
 import Toolbar from "@mui/material/Toolbar";
 import Typography from "@mui/material/Typography";
@@ -17,10 +18,21 @@ import Tabs from "@mui/material/Tabs";
 import Button from "@mui/material/Button";
 import IconButton from "@mui/material/IconButton";
 import Tooltip from "@mui/material/Tooltip";
+import Drawer from "@mui/material/Drawer";
+import List from "@mui/material/List";
+import ListItem from "@mui/material/ListItem";
+import ListItemButton from "@mui/material/ListItemButton";
+import ListItemIcon from "@mui/material/ListItemIcon";
+import ListItemText from "@mui/material/ListItemText";
+import Divider from "@mui/material/Divider";
 import WorkOutlineIcon from "@mui/icons-material/WorkOutline";
 import SettingsIcon from "@mui/icons-material/Settings";
 import LoginIcon from "@mui/icons-material/Login";
 import LogoutIcon from "@mui/icons-material/Logout";
+import MenuIcon from "@mui/icons-material/Menu";
+import DashboardIcon from "@mui/icons-material/Dashboard";
+import PsychologyIcon from "@mui/icons-material/Psychology";
+import DescriptionIcon from "@mui/icons-material/Description";
 import CircularProgress from "@mui/material/CircularProgress";
 import { AuthProvider } from "./auth/AuthContext";
 import { useAuth } from "./auth/useAuth";
@@ -69,38 +81,55 @@ const theme = createTheme({
 });
 
 const NAV_ITEMS = [
-  { label: "Jobs", to: "/jobs" },
-  { label: "Dashboard", to: "/dashboard" },
-  { label: "Skills", to: "/skills" },
-  { label: "Resume", to: "/resume" },
+  { label: "Jobs", to: "/jobs", icon: WorkOutlineIcon },
+  { label: "Dashboard", to: "/dashboard", icon: DashboardIcon },
+  { label: "Skills", to: "/skills", icon: PsychologyIcon },
+  { label: "Resume", to: "/resume", icon: DescriptionIcon },
 ];
 
-function AppContent() {
+function AppContentInner() {
   const auth = useAuth();
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down("md"));
+  const location = useLocation();
+
+  const closeDrawer = () => setDrawerOpen(false);
 
   return (
-    <BrowserRouter>
       <Box sx={{ minHeight: "100vh", bgcolor: "background.default" }}>
         <AppBar position="sticky" elevation={1}>
           <Toolbar sx={{ maxWidth: 1200, width: "100%", mx: "auto", px: 2 }}>
+            {isMobile ? (
+              <IconButton
+                color="inherit"
+                onClick={() => setDrawerOpen(true)}
+                aria-label="Open menu"
+                sx={{ mr: 1 }}
+              >
+                <MenuIcon />
+              </IconButton>
+            ) : null}
             <WorkOutlineIcon sx={{ color: "primary.main", mr: 1 }} />
-            <Typography variant="h6" fontWeight={700} sx={{ mr: 4 }}>
+            <Typography variant="h6" fontWeight={700} sx={{ mr: isMobile ? 0 : 4, flexGrow: isMobile ? 1 : 0 }}>
               Job Seeker
             </Typography>
-            <Tabs value={false} sx={{ flexGrow: 1 }}>
-              {NAV_ITEMS.map((item) => (
-                <Tab
-                  key={item.to}
-                  label={item.label}
-                  component={NavLink}
-                  to={item.to}
-                  sx={{
-                    "&.active": { color: "primary.main", fontWeight: 700 },
-                  }}
-                />
-              ))}
-            </Tabs>
+            {!isMobile && (
+              <Tabs value={false} sx={{ flexGrow: 1 }}>
+                {NAV_ITEMS.map((item) => (
+                  <Tab
+                    key={item.to}
+                    label={item.label}
+                    component={NavLink}
+                    to={item.to}
+                    sx={{
+                      "&.active": { color: "primary.main", fontWeight: 700 },
+                    }}
+                  />
+                ))}
+              </Tabs>
+            )}
             <Box
               sx={{
                 display: "flex",
@@ -165,6 +194,62 @@ function AppContent() {
           </Toolbar>
         </AppBar>
 
+        <Drawer
+          anchor="left"
+          open={drawerOpen}
+          onClose={closeDrawer}
+          PaperProps={{
+            sx: { width: 280 },
+          }}
+        >
+          <Box sx={{ py: 2, px: 2 }}>
+            <Typography variant="h6" fontWeight={700} sx={{ display: "flex", alignItems: "center", gap: 1 }}>
+              <WorkOutlineIcon color="primary" />
+              Job Seeker
+            </Typography>
+          </Box>
+          <Divider />
+          <List>
+            {NAV_ITEMS.map((item) => {
+              const Icon = item.icon;
+              const isActive = location.pathname === item.to || location.pathname.startsWith(item.to + "/");
+              return (
+                <ListItem key={item.to} disablePadding>
+                  <ListItemButton
+                    component={NavLink}
+                    to={item.to}
+                    onClick={closeDrawer}
+                    selected={isActive}
+                    sx={{
+                      "&.Mui-selected": {
+                        bgcolor: "action.selected",
+                        color: "primary.main",
+                        fontWeight: 600,
+                      },
+                    }}
+                  >
+                    <ListItemIcon sx={{ minWidth: 40 }}>
+                      <Icon color={isActive ? "primary" : "inherit"} fontSize="small" />
+                    </ListItemIcon>
+                    <ListItemText primary={item.label} />
+                  </ListItemButton>
+                </ListItem>
+              );
+            })}
+          </List>
+          <Divider />
+          <List>
+            <ListItem disablePadding>
+              <ListItemButton onClick={() => { setSettingsOpen(true); closeDrawer(); }}>
+                <ListItemIcon sx={{ minWidth: 40 }}>
+                  <SettingsIcon fontSize="small" />
+                </ListItemIcon>
+                <ListItemText primary="Settings" />
+              </ListItemButton>
+            </ListItem>
+          </List>
+        </Drawer>
+
         <Box sx={{ maxWidth: 1200, mx: "auto", px: 2, py: 3 }}>
           <Suspense
             fallback={
@@ -188,6 +273,13 @@ function AppContent() {
           </Suspense>
         </Box>
       </Box>
+  );
+}
+
+function AppContent() {
+  return (
+    <BrowserRouter>
+      <AppContentInner />
     </BrowserRouter>
   );
 }

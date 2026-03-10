@@ -120,6 +120,20 @@ def _attach_detected_skills(items: list[dict], db: Session) -> None:
         item["detected_skills"] = sorted(by_group.get(key, set()))
 
 
+def duplicate_grouped_job_ids_subquery(query):
+    """
+    Return a subquery of representative JobRow ids using the same grouping
+    logic as "Hide duplicates": newest row per (company, lower(title)).
+    """
+    title_l = func.lower(JobRow.title)
+    return (
+        query.with_entities(JobRow.id)
+        .distinct(JobRow.company, title_l)
+        .order_by(JobRow.company, title_l, JobRow.created_at.desc())
+        .subquery()
+    )
+
+
 def list_jobs(db: Session, params: ListJobsParams) -> dict:
     """List jobs with filters, pagination, and optional duplicate grouping."""
     q = db.query(JobRow)
@@ -145,12 +159,7 @@ def list_jobs(db: Session, params: ListJobsParams) -> dict:
     )
 
     if params.group_duplicates:
-        rep_ids_sq = (
-            q.with_entities(JobRow.id)
-            .distinct(JobRow.company, title_l)
-            .order_by(JobRow.company, title_l, JobRow.created_at.desc())
-            .subquery()
-        )
+        rep_ids_sq = duplicate_grouped_job_ids_subquery(q)
 
         total = db.query(func.count()).select_from(rep_ids_sq).scalar() or 0
         pages = max(1, (total + params.per_page - 1) // params.per_page)
@@ -329,10 +338,7 @@ def get_analytics(db: Session, params: AnalyticsParams) -> dict:
         added_over_time = [{"date": r[0], "count": r[1]} for r in timeline_rows]
 
         id_subq = (
-            base_q.with_entities(JobRow.id)
-            .distinct(JobRow.company, title_l)
-            .order_by(JobRow.company, title_l, JobRow.created_at.desc())
-            .subquery()
+            duplicate_grouped_job_ids_subquery(base_q)
         )
         loc_rows = (
             db.query(func.unnest(JobRow.location).label("loc"), func.count())

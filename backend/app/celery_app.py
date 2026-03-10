@@ -5,6 +5,7 @@ import os
 from celery import Celery
 
 from app.import_engine import SOURCES, _prepare_source, _run_justjoin, _run_nofluffjobs
+from app.services.embedding_sync_service import run_sync_task
 
 
 def _make_celery() -> Celery:
@@ -41,3 +42,8 @@ def run_import_all() -> None:
   for src in SOURCES:
     run_import_source.delay(src)
 
+
+@celery_app.task(name="embeddings.run_sync")
+def run_embedding_sync(run_id: str) -> None:
+  """Run a persistent embedding sync task in the worker process."""
+  run_sync_task(run_id)

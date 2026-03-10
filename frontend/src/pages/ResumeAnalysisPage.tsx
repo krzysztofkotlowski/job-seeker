@@ -12,6 +12,7 @@ import {
 } from "recharts";
 import Box from "@mui/material/Box";
 import Paper from "@mui/material/Paper";
+import { useTheme, useMediaQuery } from "@mui/material";
 import { ChartTooltip } from "../components/ChartTooltip";
 import Fade from "@mui/material/Fade";
 import Grow from "@mui/material/Grow";
@@ -34,11 +35,13 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { api } from "../api/client";
 import type {
+  EmbeddingStatusResponse,
   Job,
   ResumeAnalyzeResult,
   ResumeByCategory,
   ResumeMatchItem,
   ResumeRecommendation,
+  ResumeRecommendationsResponse,
   SkillWithWeight,
 } from "../api/types";
 
@@ -46,6 +49,7 @@ const ACCEPT = ".pdf";
 /** Resume analyze can be slow with RAG (embed) + large job DB (30k+). */
 const ANALYZE_TIMEOUT_MS = 120000;
 const SUMMARIZE_TIMEOUT_MS = 120000;
+const EMBEDDING_STATUS_POLL_MS = 5000;
 
 const ECHO_PREFIXES = [
   "Format:",
@@ -278,8 +282,10 @@ function chartHeight(itemCount: number): number {
 
 const MatchedSkillsChart = memo(function MatchedSkillsChart({
   data,
+  yAxisWidth = 200,
 }: {
   data: SkillWithWeight[];
+  yAxisWidth?: number;
 }) {
   if (data.length === 0)
     return (
@@ -301,7 +307,7 @@ const MatchedSkillsChart = memo(function MatchedSkillsChart({
         <YAxis
           type="category"
           dataKey="skill"
-          width={200}
+          width={yAxisWidth}
           tick={{ fontSize: 14 }}
         />
         <Tooltip
@@ -338,8 +344,10 @@ const MatchedSkillsChart = memo(function MatchedSkillsChart({
 
 const SkillsToAddChart = memo(function SkillsToAddChart({
   data,
+  yAxisWidth = 200,
 }: {
   data: SkillWithWeight[];
+  yAxisWidth?: number;
 }) {
   if (data.length === 0)
     return (
@@ -361,7 +369,7 @@ const SkillsToAddChart = memo(function SkillsToAddChart({
         <YAxis
           type="category"
           dataKey="skill"
-          width={200}
+          width={yAxisWidth}
           tick={{ fontSize: 14 }}
         />
         <Tooltip
@@ -493,14 +501,11 @@ const RecommendationCard = memo(function RecommendationCard({
   );
 });
 
-type EmbeddingStatus = {
-  available: boolean;
-  indexed: number;
-  total: number;
-  syncing?: boolean;
-} | null;
-
 export function ResumeAnalysisPage() {
+  const theme = useTheme();
+  const isMobile = useMediaQuery(theme.breakpoints.down("sm"));
+  const chartYAxisWidth = isMobile ? 100 : 200;
+
   const [result, setResult] = useState<ResumeAnalyzeResult | null>(null);
   const [loading, setLoading] = useState(false);
   const [summaryLoading, setSummaryLoading] = useState(false);
@@ -509,13 +514,70 @@ export function ResumeAnalysisPage() {
   const [categories, setCategories] = useState<string[]>([]);
   const [selectedCategory, setSelectedCategory] = useState("");
   const [chartsReady, setChartsReady] = useState(false);
-  const [embeddingStatus, setEmbeddingStatus] = useState<EmbeddingStatus>(null);
+  const [embeddingStatus, setEmbeddingStatus] =
+    useState<EmbeddingStatusResponse | null>(null);
   const [recommendationsLoading, setRecommendationsLoading] = useState(false);
   const [recommendationsError, setRecommendationsError] = useState<
     string | null
   >(null);
-  const recommendationsAttemptedRef = useRef(false);
+  const [recommendationsNotice, setRecommendationsNotice] = useState<
+    { severity: "info" | "warning"; message: string } | null
+  >(null);
+  const [recommendationsStatus, setRecommendationsStatus] = useState<
+    ResumeRecommendationsResponse["status"] | null
+  >(null);
+  const [recommendationsMessage, setRecommendationsMessage] = useState<
+    string | null
+  >(null);
+  const recommendationsFingerprintRef = useRef<string | null>(null);
   const safe = normalizeResult(result);
+  const extractedSkills = safe?.extracted_skills;
+  const existingRecommendations = safe?.recommendations;
+  const hasExtractedSkills = Boolean(safe?.extracted_skills?.length);
+  const currentOrActiveRun = embeddingStatus?.run ?? embeddingStatus?.active_run;
+  const currentRunStatus = currentOrActiveRun?.status ?? null;
+  const isEmbeddingRunActive =
+    currentRunStatus === "queued" || currentRunStatus === "running";
+  const activeIndexedDocuments = embeddingStatus?.active_indexed_documents ?? 0;
+  const recommendationsTerminal =
+    recommendationsStatus !== null &&
+    ["ok", "fallback", "reindex_required", "active_embedding_unavailable", "unavailable"].includes(
+      recommendationsStatus,
+    );
+  const shouldPollEmbeddingStatus = Boolean(
+    safe &&
+      embeddingStatus?.available &&
+      (isEmbeddingRunActive ||
+        (activeIndexedDocuments === 0 && !recommendationsTerminal)),
+  );
+  const recommendationsReady = Boolean(
+    hasExtractedSkills && embeddingStatus?.available && activeIndexedDocuments > 0,
+  );
+  const recommendationFingerprint = hasExtractedSkills
+    ? JSON.stringify({
+        skills: [...(safe?.extracted_skills ?? [])].sort(),
+        run_id: currentOrActiveRun?.id ?? null,
+        run_status: currentRunStatus,
+        active_docs: activeIndexedDocuments,
+      })
+    : null;
+  const recommendationCaption = !hasExtractedSkills
+    ? null
+    : isEmbeddingRunActive
+      ? `Indexing is still running: ${(currentOrActiveRun?.processed ?? 0).toLocaleString()} / ${(currentOrActiveRun?.target_total ?? 0).toLocaleString()}. Recommendations will retry automatically.`
+      : recommendationsStatus === "reindex_required" ||
+          recommendationsStatus === "active_embedding_unavailable" ||
+          recommendationsStatus === "unavailable"
+        ? recommendationsMessage ||
+          "Recommendations need a rebuilt or available active vector index."
+        : embeddingStatus?.available && activeIndexedDocuments === 0
+          ? "No active vector index yet. Run Re-index all."
+          : recommendationsStatus === "ok" ||
+              recommendationsStatus === "fallback"
+            ? "No matching jobs found. Try adjusting your skills or index more jobs."
+            : embeddingStatus?.available
+              ? "Recommendations will load automatically when the active vector index is ready."
+              : "Enable RAG and sync embeddings for job recommendations.";
 
   useEffect(() => {
     api
@@ -531,9 +593,14 @@ export function ResumeAnalysisPage() {
     } catch {
       setEmbeddingStatus({
         available: false,
-        indexed: 0,
-        total: 0,
-        syncing: false,
+        current_db_total: 0,
+        run: null,
+        active_run: null,
+        active_index_name: null,
+        active_indexed_documents: 0,
+        current_config_matches_active: false,
+        reindex_required: true,
+        legacy_indices: [],
       });
     }
   }, []);
@@ -543,36 +610,87 @@ export function ResumeAnalysisPage() {
   }, [fetchEmbeddingStatus]);
 
   useEffect(() => {
+    if (!shouldPollEmbeddingStatus) return;
+    const id = setInterval(fetchEmbeddingStatus, EMBEDDING_STATUS_POLL_MS);
+    return () => clearInterval(id);
+  }, [fetchEmbeddingStatus, shouldPollEmbeddingStatus]);
+
+  useEffect(() => {
+    if (!safe) return;
+    const handleFocus = () => {
+      fetchEmbeddingStatus();
+    };
+    window.addEventListener("focus", handleFocus);
+    return () => window.removeEventListener("focus", handleFocus);
+  }, [fetchEmbeddingStatus, safe]);
+
+  useEffect(() => {
     if (safe?.summary) fetchEmbeddingStatus();
   }, [safe?.summary, fetchEmbeddingStatus]);
 
   useEffect(() => {
     if (
-      !safe?.extracted_skills?.length ||
-      (safe.recommendations && safe.recommendations.length > 0) ||
-      recommendationsLoading ||
-      recommendationsAttemptedRef.current ||
-      !embeddingStatus?.available
+      !recommendationsReady ||
+      (existingRecommendations?.length ?? 0) > 0 ||
+      !recommendationFingerprint ||
+      recommendationsFingerprintRef.current === recommendationFingerprint
     ) {
       return;
     }
     let cancelled = false;
-    recommendationsAttemptedRef.current = true;
+    recommendationsFingerprintRef.current = recommendationFingerprint;
     setRecommendationsLoading(true);
     setRecommendationsError(null);
     api
-      .resumeRecommendations(safe.extracted_skills)
-      .then((res) => {
+      .resumeRecommendations(extractedSkills ?? [])
+      .then((res: ResumeRecommendationsResponse) => {
         if (!cancelled) {
+          setRecommendationsStatus(res.status);
+          setRecommendationsMessage(res.message ?? null);
           setResult((prev) =>
             prev
               ? { ...prev, recommendations: res.recommendations ?? [] }
               : prev,
           );
+          if (
+            res.status === "reindex_required" ||
+            res.status === "active_embedding_unavailable" ||
+            res.status === "unavailable"
+          ) {
+            setRecommendationsNotice({
+              severity:
+                res.status === "reindex_required" ? "warning" : "info",
+              message:
+                res.message ||
+                "Recommendations need a rebuilt or available active vector index.",
+            });
+          } else if (res.status === "fallback") {
+            setRecommendationsNotice({
+              severity: "info",
+              message:
+                res.message ||
+                "Recommendations are using keyword fallback on the active Elasticsearch index.",
+            });
+          } else if (
+            res.active_run &&
+            res.config_matches_active === false &&
+            !res.message
+          ) {
+            setRecommendationsNotice({
+              severity: "info",
+              message: `Recommendations are using the older active index built with ${res.active_run.embed_model} (${res.active_run.embed_dims} dims) until you rebuild.`,
+            });
+          } else {
+            setRecommendationsNotice(null);
+          }
         }
       })
       .catch((e) => {
         if (!cancelled) {
+          recommendationsFingerprintRef.current = null;
+          setRecommendationsStatus(null);
+          setRecommendationsMessage(null);
+          setRecommendationsNotice(null);
           setRecommendationsError(
             e instanceof Error ? e.message : "Failed to load recommendations",
           );
@@ -585,10 +703,10 @@ export function ResumeAnalysisPage() {
       cancelled = true;
     };
   }, [
-    safe?.extracted_skills,
-    safe?.recommendations,
-    recommendationsLoading,
-    embeddingStatus?.available,
+    recommendationFingerprint,
+    recommendationsReady,
+    existingRecommendations,
+    extractedSkills,
   ]);
 
   useEffect(() => {
@@ -606,7 +724,10 @@ export function ResumeAnalysisPage() {
     setResult(null);
     setSummaryError(null);
     setRecommendationsError(null);
-    recommendationsAttemptedRef.current = false;
+    setRecommendationsNotice(null);
+    setRecommendationsStatus(null);
+    setRecommendationsMessage(null);
+    recommendationsFingerprintRef.current = null;
     setLoading(true);
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), ANALYZE_TIMEOUT_MS);
@@ -870,6 +991,11 @@ export function ResumeAnalysisPage() {
                     </ReactMarkdown>
                   </Box>
                 ) : null}
+                {recommendationsNotice ? (
+                  <Alert severity={recommendationsNotice.severity} sx={{ mt: 3 }}>
+                    {recommendationsNotice.message}
+                  </Alert>
+                ) : null}
                 {safe.recommendations && safe.recommendations.length > 0 ? (
                   <Box sx={{ mt: 3 }}>
                     <Typography
@@ -936,20 +1062,17 @@ export function ResumeAnalysisPage() {
                     </Typography>
                     <LinearProgress sx={{ borderRadius: 1 }} />
                   </Box>
-                ) : (
+                ) : hasExtractedSkills &&
+                  recommendationCaption &&
+                  recommendationCaption !== recommendationsNotice?.message ? (
                   <Typography
                     variant="caption"
                     color="text.secondary"
                     sx={{ display: "block", mt: 2 }}
                   >
-                    {embeddingStatus?.available && embeddingStatus.indexed > 0
-                      ? "No matching jobs found. Try adjusting your skills or index more jobs."
-                      : embeddingStatus?.available &&
-                          embeddingStatus.indexed === 0
-                        ? "Index jobs for RAG recommendations (Import page)."
-                        : "Enable RAG and sync embeddings for job recommendations."}
+                    {recommendationCaption}
                   </Typography>
-                )}
+                ) : null}
                 {!safe.summary && (
                   <Box>
                     <Typography
@@ -1075,7 +1198,7 @@ export function ResumeAnalysisPage() {
                           </Typography>
                           <FormControl
                             size="small"
-                            sx={{ minWidth: 280, mb: 3 }}
+                            sx={{ minWidth: { xs: "100%", sm: 280 }, mb: 3 }}
                           >
                             <InputLabel>Position</InputLabel>
                             <Select
@@ -1212,7 +1335,7 @@ export function ResumeAnalysisPage() {
                                     {matchingRaw.length > MAX_SKILLS_IN_CHART &&
                                       ` — top ${MAX_SKILLS_IN_CHART}`}
                                   </Typography>
-                                  <MatchedSkillsChart data={matching} />
+                                  <MatchedSkillsChart data={matching} yAxisWidth={chartYAxisWidth} />
                                 </Box>
 
                                 <Box
@@ -1239,7 +1362,7 @@ export function ResumeAnalysisPage() {
                                       .length > MAX_SKILLS_IN_CHART &&
                                       ` — top ${MAX_SKILLS_IN_CHART}`}
                                   </Typography>
-                                  <SkillsToAddChart data={toAdd} />
+                                  <SkillsToAddChart data={toAdd} yAxisWidth={chartYAxisWidth} />
                                 </Box>
                               </Box>
                             </Box>

@@ -16,6 +16,7 @@ vi.mock("../api/client", () => ({
       api_key_set: false,
       llm_model: "",
       embed_model: "",
+      embed_dims: 384,
       temperature: 0.3,
       max_output_tokens: 1024,
     }),
@@ -34,6 +35,7 @@ vi.mock("../api/client", () => ({
       api_key_set: true,
       llm_model: "",
       embed_model: "",
+      embed_dims: 1536,
       temperature: 0.3,
       max_output_tokens: 1024,
     }),
@@ -50,6 +52,10 @@ function renderWithProviders() {
 }
 
 describe("AIConfigContent", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("saves OpenAI config without empty llm_model or embed_model in payload", async () => {
     const user = userEvent.setup();
     renderWithProviders();
@@ -79,5 +85,13 @@ describe("AIConfigContent", () => {
     expect(payload.embed_source).toBe("ollama");
     expect(payload).not.toHaveProperty("llm_model");
     expect(payload).not.toHaveProperty("embed_model");
+  });
+
+  it("shows resolved embedding dims from the saved config", async () => {
+    renderWithProviders();
+
+    expect(
+      await screen.findByText(/Resolved embedding dims:\s*384/i),
+    ).toBeInTheDocument();
   });
 });

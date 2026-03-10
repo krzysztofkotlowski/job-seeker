@@ -3,7 +3,7 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services.llm_service import DEFAULT_LLM_MODEL, LLMConfig, get_llm_config, summarize_resume_match
+from app.services.llm_service import DEFAULT_LLM_MODEL, LLMConfig, summarize_resume_match
 
 
 def test_summarize_resume_match_returns_none_when_disabled():

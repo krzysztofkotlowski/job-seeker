@@ -139,7 +139,7 @@ class AIConfigRow(Base):
     openai_llm_model = Column(String(100), nullable=False, default="gpt-4o-mini")
     embed_source = Column(String(20), nullable=False, default="ollama")
     llm_model = Column(String(255), nullable=False, default="qwen2.5:7b")
-    embed_model = Column(String(255), nullable=False, default="nomic-embed-text")
+    embed_model = Column(String(255), nullable=False, default="all-minilm")
     temperature = Column(Float, nullable=False, default=0.3)
     max_output_tokens = Column(Integer, nullable=False, default=1024)
     embed_dims = Column(Integer, nullable=True)
@@ -190,3 +190,39 @@ class ImportTaskRow(Base):
             "started_at": self.started_at.isoformat() if self.started_at else None,
             "updated_at": self.updated_at.isoformat() if self.updated_at else None,
         }
+
+
+class EmbeddingSyncRunRow(Base):
+    """Persistent server-owned embedding sync runs."""
+
+    __tablename__ = "embedding_sync_runs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    status = Column(String(20), nullable=False, default="queued", index=True)
+    mode = Column(String(20), nullable=False, default="incremental")
+    unique_only = Column(Boolean, nullable=False, default=False, server_default="false")
+
+    embed_source = Column(String(20), nullable=False, default="ollama")
+    embed_model = Column(String(255), nullable=False)
+    embed_dims = Column(Integer, nullable=False)
+
+    db_total_snapshot = Column(Integer, nullable=False, default=0)
+    selection_total = Column(Integer, nullable=False, default=0)
+    target_total = Column(Integer, nullable=False, default=0)
+    processed = Column(Integer, nullable=False, default=0)
+    indexed = Column(Integer, nullable=False, default=0)
+    failed = Column(Integer, nullable=False, default=0)
+
+    index_alias = Column(String(255), nullable=False)
+    physical_index_name = Column(String(255), nullable=True)
+    celery_task_id = Column(String(255), nullable=True)
+    error_message = Column(Text, nullable=True)
+
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+    activated_at = Column(DateTime(timezone=True), nullable=True, index=True)
+
+    __table_args__ = (
+        Index("idx_embedding_sync_runs_status_updated_at", "status", "updated_at"),
+    )

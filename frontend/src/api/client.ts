@@ -10,10 +10,13 @@ import type {
   AnalyticsData,
   ResumeAnalyzeResult,
   ResumeRecommendation,
+  ResumeRecommendationsResponse,
   OllamaModel,
   AIConfig,
   AIConfigUpdate,
   AIMetrics,
+  EmbeddingStatusResponse,
+  EmbeddingSyncRun,
 } from "./types";
 import { getTokenForRequest } from "../auth/tokenProvider";
 
@@ -173,13 +176,7 @@ export const api = {
     }),
 
   /** Embedding index status for RAG. */
-  embeddingStatus: () =>
-    request<{
-      available: boolean;
-      indexed: number;
-      total: number;
-      syncing?: boolean;
-    }>("/jobs/embedding-status"),
+  embeddingStatus: () => request<EmbeddingStatusResponse>("/jobs/embedding-status"),
 
   /** Clear the embedding index. */
   clearEmbeddingIndex: () =>
@@ -187,22 +184,36 @@ export const api = {
       method: "DELETE",
     }),
 
-  /** Sync embeddings (non-streaming). */
-  syncEmbeddings: () =>
-    request<{ indexed: number; total: number }>("/jobs/sync-embeddings", {
-      method: "POST",
-    }),
+  /** Queue a persistent embedding sync run. */
+  syncEmbeddings: (params?: {
+    mode?: "full" | "incremental";
+    unique_only?: boolean;
+  }) => {
+    const sp = new URLSearchParams();
+    if (params?.mode) sp.set("mode", params.mode);
+    if (params?.unique_only) sp.set("unique_only", "true");
+    const qs = sp.toString();
+    return request<EmbeddingSyncRun>(
+      `/jobs/sync-embeddings${qs ? `?${qs}` : ""}`,
+      { method: "POST" },
+    );
+  },
 
-  /** Sync embeddings with progress. Calls onProgress for each update. */
+  /** Sync embeddings with progress. Calls onProgress for each update. uniqueOnly dedupes by (company,title). */
   syncEmbeddingsStream: async (
     onProgress: (indexed: number, total: number, done: boolean) => void,
     signal?: AbortSignal,
     mode?: "full" | "incremental",
+    uniqueOnly?: boolean,
   ): Promise<{ indexed: number; total: number }> => {
     const token = await getTokenForRequest();
     const headers = new Headers();
     if (token) headers.set("Authorization", `Bearer ${token}`);
-    const url = `${BASE}/jobs/sync-embeddings/stream${mode ? `?mode=${mode}` : ""}`;
+    const params = new URLSearchParams();
+    if (mode) params.set("mode", mode);
+    if (uniqueOnly) params.set("unique_only", "true");
+    const qs = params.toString();
+    const url = `${BASE}/jobs/sync-embeddings/stream${qs ? `?${qs}` : ""}`;
     const res = await fetch(url, {
       method: "POST",
       headers,
@@ -338,7 +349,7 @@ export const api = {
 
   /** Fetch hybrid search recommendations for extracted skills. Called in background after analyze. */
   resumeRecommendations: (extracted_skills: string[]) =>
-    request<{ recommendations: ResumeRecommendation[] }>(
+    request<ResumeRecommendationsResponse>(
       "/resume/recommendations",
       {
         method: "POST",

@@ -8,9 +8,9 @@ from fastapi import APIRouter, HTTPException, Query, Depends
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
+from app.celery_app import run_embedding_sync
 from app.database import get_db
 from app.errors import api_error
-from app.services.ai_config_service import get_ai_config
 from app.services import jobs_service
 from app.models.tables import JobRow
 from app.parsers.base import format_category
@@ -26,8 +26,7 @@ from app.parsers.detector import detect_and_parse, is_supported_url
 from app.services.currency import normalize_salary
 
 router = APIRouter()
-
-
+log = logging.getLogger(__name__)
 @router.post("/parse")
 def parse_url(req: ParseRequest):
     if not is_supported_url(req.url):
@@ -162,13 +161,25 @@ def analytics(
 
 
 @router.post("/sync-embeddings")
-def sync_embeddings(db: Session = Depends(get_db)):
+def sync_embeddings(
+    db: Session = Depends(get_db),
+    mode: str = Query("full", description="full=create new managed index, incremental=add missing docs"),
+    unique_only: bool = Query(False, description="Index one newest job per (company,title)"),
+):
     """
-    Index all jobs into Elasticsearch for RAG/semantic search.
-    Call after imports to enable resume AI summaries with vector retrieval.
+    Queue a persistent embedding sync run.
+    Full mode builds a new managed physical index and cuts the alias over on success.
+    Incremental mode only indexes missing jobs into the currently active managed index.
     """
     try:
-        from app.services.elasticsearch_service import bulk_index_jobs, is_available
+        from app.services.elasticsearch_service import is_available
+        from app.services.embedding_sync_service import (
+            IncrementalReindexRequiredError,
+            SyncAlreadyRunningError,
+            attach_celery_task_id,
+            queue_sync_run,
+            serialize_run,
+        )
     except ImportError:
         raise api_error(
             "RAG_UNAVAILABLE",
@@ -181,50 +192,49 @@ def sync_embeddings(db: Session = Depends(get_db)):
             "Elasticsearch is not reachable. Ensure it is running.",
             status_code=503,
         )
-    ai_cfg = get_ai_config(db)
-    rows = db.query(JobRow).all()
-    embed_model = ai_cfg["embed_model"] if ai_cfg.get("embed_source") != "openai" else None
-    indexed = bulk_index_jobs(rows, embed_model=embed_model, ai_config=ai_cfg)
-    return {"indexed": indexed, "total": len(rows)}
+    try:
+        row = queue_sync_run(db, mode=mode, unique_only=unique_only)
+    except SyncAlreadyRunningError as e:
+        raise api_error("SYNC_IN_PROGRESS", str(e), status_code=409)
+    except IncrementalReindexRequiredError as e:
+        raise api_error("FULL_REINDEX_REQUIRED", str(e), status_code=409)
+    except ValueError as e:
+        raise api_error("INVALID_MODE", str(e), status_code=400)
+
+    task = run_embedding_sync.delay(str(row.id))
+    row = attach_celery_task_id(db, str(row.id), getattr(task, "id", None)) or row
+    return serialize_run(row)
 
 
 @router.get("/embedding-status")
 def embedding_status(db: Session = Depends(get_db)):
     """
-    Return embedding index status when Elasticsearch is available.
+    Return DB-backed embedding sync status and the currently active recommendation index.
     """
     try:
-        from app.services.elasticsearch_service import (
-            _get_client,
-            _index_for_dims,
-            is_available,
-            is_sync_in_progress,
-            ensure_index,
-        )
+        from app.services.embedding_sync_service import get_status
     except ImportError:
-        return {"available": False, "indexed": 0, "total": 0, "syncing": False}
-    if not is_available():
-        return {"available": False, "indexed": 0, "total": 0, "syncing": False}
-    try:
-        client = _get_client()
-        ai_cfg = get_ai_config(db)
-        embed_dims = ai_cfg.get("embed_dims")
-        if not client or not ensure_index(client, embed_dims=embed_dims):
-            return {"available": True, "indexed": 0, "total": 0, "syncing": is_sync_in_progress()}
-        total = db.query(JobRow).count()
-        index_name = _index_for_dims(embed_dims)
-        count_resp = client.count(index=index_name)
-        indexed = count_resp.get("count", 0)
-        return {"available": True, "indexed": indexed, "total": total, "syncing": is_sync_in_progress()}
-    except Exception:
-        return {"available": True, "indexed": 0, "total": 0, "syncing": is_sync_in_progress()}
+        return {
+            "available": False,
+            "current_db_total": 0,
+            "run": None,
+            "active_run": None,
+            "active_index_name": None,
+            "active_indexed_documents": 0,
+            "current_config_matches_active": False,
+            "reindex_required": True,
+            "legacy_indices": [],
+        }
+    return get_status(db)
 
 
 @router.delete("/embedding-index")
 def clear_embedding_index(db: Session = Depends(get_db)):
-    """Clear the Elasticsearch jobs index. Use before full re-index."""
+    """Clear the active managed embedding index and deactivate recommendation source metadata."""
     try:
-        from app.services.elasticsearch_service import clear_index, is_available, is_sync_in_progress
+        from app.services.elasticsearch_service import clear_index, is_available
+        from app.services.embedding_sync_service import get_active_run, get_running_run
+        from app.models.tables import EmbeddingSyncRunRow
     except ImportError:
         raise api_error(
             "RAG_UNAVAILABLE",
@@ -237,88 +247,66 @@ def clear_embedding_index(db: Session = Depends(get_db)):
             "Elasticsearch is not reachable. Ensure it is running.",
             status_code=503,
         )
-    if is_sync_in_progress():
+    if get_running_run(db):
         raise api_error(
             "SYNC_IN_PROGRESS",
             "Embedding sync is already running. Please wait for it to complete.",
             status_code=409,
         )
-    ai_cfg = get_ai_config(db)
-    ok = clear_index(embed_dims=ai_cfg.get("embed_dims"))
+    active_run = get_active_run(db)
+    if not active_run or not active_run.physical_index_name:
+        return {"cleared": False, "message": "No active managed embedding index to clear."}
+    ok = clear_index(index_name=active_run.physical_index_name)
     if not ok:
         raise api_error("CLEAR_FAILED", "Failed to clear embedding index", status_code=500)
-    return {"cleared": True}
+    (
+        db.query(EmbeddingSyncRunRow)
+        .filter(EmbeddingSyncRunRow.activated_at.isnot(None))
+        .update({EmbeddingSyncRunRow.activated_at: None}, synchronize_session=False)
+    )
+    db.commit()
+    return {"cleared": True, "index_name": active_run.physical_index_name}
 
 
 @router.post("/sync-embeddings/stream")
 def sync_embeddings_stream(
     db: Session = Depends(get_db),
-    mode: str = Query("incremental", description="full=clear+reindex all, incremental=add missing only"),
+    mode: str = Query("full", description="full=create new managed index, incremental=add missing only"),
+    unique_only: bool = Query(False, description="Index one newest job per (company,title)"),
 ):
     """
-    Index all jobs into Elasticsearch with SSE progress updates.
-    Streams events: data: {"indexed": N, "total": M}\n\n and final data: {"done": true, "indexed": N, "total": M}\n\n
+    Deprecated compatibility wrapper around the DB-backed embedding sync API.
+    Starts a run when none is active, then streams run status until completion.
     """
     import json
 
     from fastapi.responses import StreamingResponse
 
     try:
-        from app.services.elasticsearch_service import (
-            bulk_index_jobs_stream,
-            clear_index,
-            get_jobs_not_indexed,
-            is_available,
-            is_sync_in_progress,
-        )
+        from app.services.embedding_sync_service import get_running_run, get_status
     except ImportError:
         raise api_error(
             "RAG_UNAVAILABLE",
             "Elasticsearch not configured. Install elasticsearch package.",
             status_code=503,
         )
-    if not is_available():
-        raise api_error(
-            "ELASTICSEARCH_UNAVAILABLE",
-            "Elasticsearch is not reachable. Ensure it is running.",
-            status_code=503,
-        )
-    if is_sync_in_progress():
-        raise api_error(
-            "SYNC_IN_PROGRESS",
-            "Embedding sync is already running. Please wait for it to complete.",
-            status_code=409,
-        )
-    ai_cfg = get_ai_config(db)
-    embed_dims = ai_cfg.get("embed_dims")
-    rows = db.query(JobRow).all()
-
-    if mode == "full":
-        if not clear_index(embed_dims=embed_dims):
-            raise api_error("CLEAR_FAILED", "Failed to clear embedding index", status_code=500)
-        jobs_to_index = rows
-    else:
-        jobs_to_index = get_jobs_not_indexed(rows, embed_dims=embed_dims)
-        if not jobs_to_index:
-            async def empty_stream():
-                yield f"data: {json.dumps({'done': True, 'indexed': 0, 'total': 0})}\n\n"
-                await asyncio.sleep(0)
-            return StreamingResponse(
-                empty_stream(),
-                media_type="text/event-stream",
-                headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-            )
-
-    embed_model = ai_cfg["embed_model"] if ai_cfg.get("embed_source") != "openai" else None
+    if not get_running_run(db):
+        sync_embeddings(db=db, mode=mode, unique_only=unique_only)
 
     async def stream_gen_async():
-        for event in bulk_index_jobs_stream(
-            jobs_to_index,
-            embed_model=embed_model,
-            ai_config=ai_cfg,
-        ):
-            yield f"data: {json.dumps(event)}\n\n"
-            await asyncio.sleep(0)  # Force flush to client
+        while True:
+            status = get_status(db)
+            run = status.get("run") or {}
+            done = (run.get("status") or "") in {"completed", "failed", "interrupted"}
+            payload = {
+                "run": run,
+                "done": done,
+                "status": status,
+            }
+            yield f"data: {json.dumps(payload)}\n\n"
+            if done:
+                break
+            await asyncio.sleep(1)
 
     return StreamingResponse(
         stream_gen_async(),

@@ -65,8 +65,8 @@ ssh "${SERVER}" "cd ${REMOTE_PATH} && docker compose -f deploy/docker-compose.pr
 # --- Ensure Ollama models (belt-and-suspenders: ollama-init may have failed) ---
 log "Ensuring Ollama models (embedding + LLM)..."
 for i in $(seq 1 30); do
-  if ssh "${SERVER}" "cd ${REMOTE_PATH} && docker compose -f deploy/docker-compose.prod.yml exec -T ollama ollama pull nomic-embed-text" 2>/dev/null; then
-    log "Embedding model (nomic-embed-text) ready."
+  if ssh "${SERVER}" "cd ${REMOTE_PATH} && docker compose -f deploy/docker-compose.prod.yml exec -T ollama ollama pull all-minilm" 2>/dev/null; then
+    log "Embedding model (all-minilm) ready."
     break
   fi
   log "Waiting for Ollama (attempt ${i}/30)..."

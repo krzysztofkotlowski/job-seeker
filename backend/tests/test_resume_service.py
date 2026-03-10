@@ -13,8 +13,47 @@ if "elasticsearch" not in sys.modules:
 from app.services.resume_service import (
     match_jobs_to_skills,
     merge_keyword_and_semantic_matches,
+    retrieve_hybrid_recommendations,
     retrieve_semantic_matches,
 )
+
+
+def _create_active_run(
+    db,
+    *,
+    embed_source: str = "ollama",
+    embed_model: str = "all-minilm",
+    embed_dims: int = 768,
+):
+    from datetime import datetime, timezone
+    from uuid import uuid4
+
+    from app.models.tables import EmbeddingSyncRunRow
+
+    row = EmbeddingSyncRunRow(
+        id=uuid4(),
+        status="completed",
+        mode="full",
+        unique_only=False,
+        embed_source=embed_source,
+        embed_model=embed_model,
+        embed_dims=embed_dims,
+        db_total_snapshot=1,
+        selection_total=1,
+        target_total=1,
+        processed=1,
+        indexed=1,
+        failed=0,
+        index_alias="jobseeker_jobs_active",
+        physical_index_name="jobseeker_jobs_run_test",
+        started_at=datetime.now(timezone.utc),
+        finished_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        activated_at=datetime.now(timezone.utc),
+    )
+    db.add(row)
+    db.commit()
+    return row
 
 
 def test_match_jobs_to_skills_returns_matches_with_limit(db):
@@ -88,6 +127,8 @@ def test_retrieve_semantic_matches_returns_matches(db):
     from app.models.tables import JobRow
     from uuid import uuid4
 
+    _create_active_run(db, embed_dims=768)
+
     job_id = uuid4()
     job_url = f"https://example.com/job/{job_id}"
     job = JobRow(
@@ -109,6 +150,7 @@ def test_retrieve_semantic_matches_returns_matches(db):
     with (
         patch("app.services.resume_service.RAG_ENABLED", True),
         patch.object(embed_mod, "embed_text") as mock_embed,
+        patch.object(embed_mod, "is_ollama_model_available", return_value=True),
         patch.object(es_mod, "is_available") as mock_avail,
         patch.object(es_mod, "search_similar") as mock_search,
     ):
@@ -122,3 +164,182 @@ def test_retrieve_semantic_matches_returns_matches(db):
     assert len(result) == 1
     assert result[0]["job"]["title"] == "ML Engineer"
     assert result[0].get("semantic") is True
+    mock_search.assert_called_once()
+    assert mock_search.call_args.kwargs["index_name"] == "jobseeker_jobs_active"
+
+
+def test_retrieve_hybrid_recommendations_keyword_fallback_on_dims_mismatch(db):
+    """Falls back to keyword search on the active managed index when dims mismatch."""
+    from app.models.tables import JobRow
+    from uuid import uuid4
+
+    _create_active_run(db, embed_dims=768)
+
+    job_id = uuid4()
+    job_url = f"https://example.com/job/{job_id}"
+    job = JobRow(
+        id=job_id,
+        url=job_url,
+        source="test",
+        title="Python Engineer",
+        company="Acme",
+        skills_required=["Python"],
+        skills_nice_to_have=[],
+        date_added="2024-01-01",
+    )
+    db.add(job)
+    db.commit()
+
+    import app.services.elasticsearch_service as es_mod
+    import app.services.embedding_service as embed_mod
+
+    with (
+        patch.object(embed_mod, "embed_text", return_value=[0.1] * 1536),
+        patch.object(embed_mod, "is_ollama_model_available", return_value=True),
+        patch.object(es_mod, "is_available", return_value=True),
+        patch.object(es_mod, "search_hybrid", return_value=[]),
+        patch.object(
+            es_mod,
+            "search_keyword",
+            return_value=[
+                {
+                    "job_id": str(job_id),
+                    "title": "Python Engineer",
+                    "company": "Acme",
+                    "url": job_url,
+                    "category": "Backend",
+                    "score": 0.7,
+                }
+            ],
+        ) as mock_keyword,
+    ):
+        result = retrieve_hybrid_recommendations(
+            db,
+            {"Python"},
+            top_k=5,
+            ai_config={"embed_source": "openai", "embed_dims": 768},
+        )
+
+    assert len(result) == 1
+    assert result[0]["job"]["title"] == "Python Engineer"
+    assert result[0]["job"]["id"] == str(job_id)
+    assert result[0]["score"] == pytest.approx(0.7)
+    assert mock_keyword.call_count == 1
+    assert mock_keyword.call_args.kwargs["index_name"] == "jobseeker_jobs_active"
+
+
+def test_retrieve_hybrid_recommendations_keyword_fallback_when_embedding_fails(db):
+    """When embedding fails, recommendations still come from Elasticsearch keyword search."""
+    from app.models.tables import JobRow
+    from uuid import uuid4
+
+    _create_active_run(db, embed_dims=768)
+
+    job_id = uuid4()
+    job_url = f"https://example.com/job/{job_id}"
+    job = JobRow(
+        id=job_id,
+        url=job_url,
+        source="test",
+        title="Platform Engineer",
+        company="Acme",
+        skills_required=["Python"],
+        skills_nice_to_have=[],
+        date_added="2024-01-01",
+    )
+    db.add(job)
+    db.commit()
+
+    import app.services.elasticsearch_service as es_mod
+    import app.services.embedding_service as embed_mod
+
+    with (
+        patch.object(embed_mod, "embed_text", return_value=None),
+        patch.object(embed_mod, "is_ollama_model_available", return_value=True),
+        patch.object(es_mod, "is_available", return_value=True),
+        patch.object(
+            es_mod,
+            "search_keyword",
+            return_value=[
+                {
+                    "job_id": str(job_id),
+                    "title": "Platform Engineer",
+                    "company": "Acme",
+                    "url": job_url,
+                    "category": "Backend",
+                    "score": 0.61,
+                }
+            ],
+        ) as mock_keyword,
+    ):
+        result = retrieve_hybrid_recommendations(
+            db,
+            {"Python"},
+            top_k=5,
+            ai_config={"embed_source": "ollama", "embed_dims": 768},
+        )
+
+    assert len(result) == 1
+    assert result[0]["job"]["title"] == "Platform Engineer"
+    assert result[0]["job"]["id"] == str(job_id)
+    assert result[0]["score"] == pytest.approx(0.61)
+    assert mock_keyword.call_count == 1
+    assert mock_keyword.call_args.kwargs["index_name"] == "jobseeker_jobs_active"
+
+
+def test_retrieve_hybrid_recommendations_uses_active_run_metadata_when_config_changes(db):
+    """Recommendations should query with active-run dims/index, not current config dims."""
+    from app.models.tables import JobRow
+    from uuid import uuid4
+
+    _create_active_run(db, embed_dims=768)
+
+    job_id = uuid4()
+    job_url = f"https://example.com/job/{job_id}"
+    job = JobRow(
+        id=job_id,
+        url=job_url,
+        source="test",
+        title="Data Platform Engineer",
+        company="Acme",
+        skills_required=["Python"],
+        skills_nice_to_have=[],
+        date_added="2024-01-01",
+    )
+    db.add(job)
+    db.commit()
+
+    import app.services.elasticsearch_service as es_mod
+    import app.services.embedding_service as embed_mod
+
+    with (
+        patch.object(embed_mod, "embed_text", return_value=[0.1] * 768),
+        patch.object(embed_mod, "is_ollama_model_available", return_value=True),
+        patch.object(es_mod, "is_available", return_value=True),
+        patch.object(
+            es_mod,
+            "search_hybrid",
+            return_value=[
+                {
+                    "job_id": str(job_id),
+                    "title": "Data Platform Engineer",
+                    "company": "Acme",
+                    "url": job_url,
+                    "category": "Backend",
+                    "score": 0.88,
+                }
+            ],
+        ) as mock_hybrid,
+    ):
+        result = retrieve_hybrid_recommendations(
+            db,
+            {"Python"},
+            top_k=5,
+            ai_config={"embed_source": "ollama", "embed_model": "all-minilm", "embed_dims": 384},
+        )
+
+    assert len(result) == 1
+    assert result[0]["job"]["title"] == "Data Platform Engineer"
+    assert result[0]["score"] == pytest.approx(0.88)
+    assert mock_hybrid.call_args.kwargs["embed_dims"] == 768
+    assert mock_hybrid.call_args.kwargs["index_name"] == "jobseeker_jobs_active"

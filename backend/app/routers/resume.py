@@ -23,7 +23,7 @@ from app.services.resume_service import (
     build_by_category,
     match_jobs_to_skills,
     merge_keyword_and_semantic_matches,
-    retrieve_hybrid_recommendations,
+    retrieve_hybrid_recommendations_response,
     retrieve_semantic_matches,
     RAG_ENABLED,
 )
@@ -73,16 +73,17 @@ async def analyze_resume(
     Upload a resume PDF. Extracts keywords/skills from the text and returns job matches.
     """
     try:
-        if not file.filename:
-            raise HTTPException(400, "No file name")
         content = await file.read()
         if not content:
             raise HTTPException(400, "File is empty")
         if len(content) > MAX_FILE_SIZE:
             raise HTTPException(400, f"File too large (max {MAX_FILE_SIZE // (1024*1024)} MB)")
 
-        filename_lower = (file.filename or "").lower()
-        if not filename_lower.endswith(".pdf"):
+        filename = file.filename or ""
+        content_type = (file.content_type or "").lower()
+        # Mobile browsers may send empty filename or "blob"; accept when Content-Type is PDF
+        is_pdf = filename.lower().endswith(".pdf") or "pdf" in content_type
+        if not is_pdf:
             raise HTTPException(400, "Only PDF files are supported.")
 
         try:
@@ -169,14 +170,28 @@ async def get_recommendations(
     """
     ai_cfg = get_ai_config(db)
     embed_model = ai_cfg["embed_model"] if ai_cfg.get("embed_source") != "openai" else None
-    recs = retrieve_hybrid_recommendations(
+    response = retrieve_hybrid_recommendations_response(
         db,
         set(body.extracted_skills or []),
         top_k=10,
         embed_model=embed_model,
         ai_config=ai_cfg,
     )
-    return {"recommendations": recs}
+    log.info(
+        "Recommendations response: status=%s count=%d active_run=%s skills_count=%d",
+        response.get("status"),
+        len(response.get("recommendations") or []),
+        (response.get("active_run") or {}).get("id"),
+        len(body.extracted_skills or []),
+    )
+    if not response.get("recommendations"):
+        log.info(
+            "Recommendations empty: status=%s active_run=%s skills_count=%d",
+            response.get("status"),
+            (response.get("active_run") or {}).get("id"),
+            len(body.extracted_skills or []),
+        )
+    return response
 
 
 @router.post("/summarize")

@@ -2,10 +2,14 @@
 
 from unittest.mock import patch
 
-import pytest
 from fastapi.testclient import TestClient
 
-from app.services.ai_config_service import list_openai_models, validate_openai_key
+from app.services.ai_config_service import (
+    OLLAMA_EMBED_DIMS,
+    OPENAI_EMBED_DIMS,
+    list_openai_models,
+    validate_openai_key,
+)
 
 
 def test_ai_list_models_returns_empty_when_ollama_unavailable(client: TestClient):
@@ -60,6 +64,48 @@ def test_ai_put_config_openai_provider(client: TestClient):
     assert data["embed_source"] == "openai"
     assert data["api_key_set"] is True
     assert "openai_api_key" not in data
+
+
+def test_ai_put_config_resets_embed_dims_when_embed_source_switches(client: TestClient):
+    """Switching embed source updates embed_dims to prevent stale index selection."""
+    r_openai = client.put(
+        "/api/v1/ai/config",
+        json={
+            "provider": "openai",
+            "openai_api_key": "sk-test-key",
+            "embed_source": "openai",
+        },
+    )
+    assert r_openai.status_code == 200
+    assert r_openai.json()["embed_dims"] == OPENAI_EMBED_DIMS
+
+    r_ollama = client.put(
+        "/api/v1/ai/config",
+        json={
+            "provider": "ollama",
+            "embed_source": "ollama",
+            "llm_model": "qwen2.5:7b",
+        },
+    )
+    assert r_ollama.status_code == 200
+    assert r_ollama.json()["embed_dims"] == OLLAMA_EMBED_DIMS
+
+
+def test_ai_put_config_resolves_ollama_embed_dims_from_model(client: TestClient):
+    """Saving an Ollama embedding model normalizes embed_dims to the model's actual output size."""
+    with patch("app.services.ai_config_service.get_ollama_embedding_dims", return_value=768):
+        r = client.put(
+            "/api/v1/ai/config",
+            json={
+                "provider": "ollama",
+                "embed_source": "ollama",
+                "embed_model": "nomic-embed-text",
+            },
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["embed_model"] == "nomic-embed-text"
+    assert data["embed_dims"] == 768
 
 
 def test_ai_metrics_returns_structure(client: TestClient):

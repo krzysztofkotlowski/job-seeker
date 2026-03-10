@@ -12,7 +12,7 @@ def upgrade(conn):
             CREATE TABLE ai_config (
                 id SERIAL PRIMARY KEY,
                 llm_model VARCHAR(255) NOT NULL DEFAULT 'phi3:mini',
-                embed_model VARCHAR(255) NOT NULL DEFAULT 'nomic-embed-text',
+                embed_model VARCHAR(255) NOT NULL DEFAULT 'all-minilm',
                 temperature FLOAT NOT NULL DEFAULT 0.3,
                 max_output_tokens INTEGER NOT NULL DEFAULT 1024,
                 updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
@@ -20,7 +20,7 @@ def upgrade(conn):
         """))
         conn.execute(text("""
             INSERT INTO ai_config (id, llm_model, embed_model, temperature, max_output_tokens)
-            VALUES (1, 'phi3:mini', 'nomic-embed-text', 0.3, 1024)
+            VALUES (1, 'phi3:mini', 'all-minilm', 0.3, 1024)
         """))
 
     if "inference_logs" not in tables:

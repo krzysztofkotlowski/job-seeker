@@ -1,7 +1,5 @@
 """Tests for job parsers (NoFluffJobs, JustJoin)."""
 
-import pytest
-
 from app.parsers.detector import is_supported_url
 from app.parsers.nofluffjobs import NoFluffJobsParser
 

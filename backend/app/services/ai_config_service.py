@@ -7,15 +7,16 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.models.tables import AIConfigRow
+from app.services.embedding_service import get_ollama_embedding_dims
 
 log = logging.getLogger(__name__)
 
 OLLAMA_URL = (os.environ.get("LLM_URL", "") or "").rstrip("/")
 DEFAULT_LLM_MODEL = os.environ.get("LLM_MODEL", "phi3:mini") or "phi3:mini"
-DEFAULT_EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text") or "nomic-embed-text"
+DEFAULT_EMBED_MODEL = os.environ.get("EMBED_MODEL", "all-minilm") or "all-minilm"
 DEFAULT_MAX_TOKENS = int(os.environ.get("LLM_MAX_OUTPUT_TOKENS", "2048") or "2048")
 OPENAI_EMBED_DIMS = 1536
-OLLAMA_EMBED_DIMS = int(os.environ.get("EMBED_DIMS", "768") or "768")
+OLLAMA_EMBED_DIMS = int(os.environ.get("EMBED_DIMS", "384") or "384")
 
 OPENAI_LLM_MODELS = [
     "gpt-4o",
@@ -27,15 +28,41 @@ OPENAI_LLM_MODELS = [
 OPENAI_EMBED_MODEL = "text-embedding-3-small"
 
 
+def _clamp_embed_dims(embed_dims: int) -> int:
+    """Clamp embed dims to sane range accepted by current schema/UI."""
+    return max(256, min(4096, int(embed_dims)))
+
+
+def resolve_embed_dims(embed_source: str | None, embed_dims: int | None) -> int:
+    """
+    Resolve active embedding dimensions for index/query operations.
+    OpenAI embeddings are fixed in-app to text-embedding-3-small (1536 dims).
+    """
+    source = (embed_source or "ollama").strip().lower()
+    if source == "openai":
+        return OPENAI_EMBED_DIMS
+    if embed_dims is None:
+        return OLLAMA_EMBED_DIMS
+    return _clamp_embed_dims(embed_dims)
+
+
+def resolve_ollama_embed_dims(embed_model: str | None, fallback_dims: int | None = None) -> int:
+    """Resolve Ollama embedding dims from the selected model, falling back safely when probing fails."""
+    detected = get_ollama_embedding_dims(embed_model)
+    if isinstance(detected, int) and detected > 0:
+        return detected
+    if isinstance(fallback_dims, int) and fallback_dims > 0:
+        return _clamp_embed_dims(fallback_dims)
+    return OLLAMA_EMBED_DIMS
+
+
 def get_ai_config(db: Session) -> dict:
     """Return current AI config from DB or env defaults. Never returns api_key."""
     row = db.query(AIConfigRow).filter(AIConfigRow.id == 1).first()
     if row:
         provider = getattr(row, "provider", None) or "ollama"
         embed_source = getattr(row, "embed_source", None) or "ollama"
-        embed_dims = getattr(row, "embed_dims", None)
-        if embed_dims is None:
-            embed_dims = OPENAI_EMBED_DIMS if embed_source == "openai" else OLLAMA_EMBED_DIMS
+        embed_dims = resolve_embed_dims(embed_source, getattr(row, "embed_dims", None))
         return {
             "provider": provider,
             "openai_llm_model": getattr(row, "openai_llm_model", None) or "gpt-4o-mini",
@@ -81,13 +108,18 @@ def update_ai_config(
         row = AIConfigRow(
             id=1,
             provider="ollama",
+            embed_source="ollama",
             llm_model=DEFAULT_LLM_MODEL,
             embed_model=DEFAULT_EMBED_MODEL,
             temperature=0.3,
             max_output_tokens=DEFAULT_MAX_TOKENS,
+            embed_dims=OLLAMA_EMBED_DIMS,
         )
         db.add(row)
         db.flush()
+
+    previous_embed_source = (getattr(row, "embed_source", None) or "ollama").strip().lower()
+    effective_embed_source = previous_embed_source
 
     if provider is not None:
         p = provider.strip().lower()
@@ -104,6 +136,7 @@ def update_ai_config(
         es = embed_source.strip().lower()
         if es in ("ollama", "openai"):
             row.embed_source = es
+            effective_embed_source = es
     if llm_model is not None:
         row.llm_model = llm_model.strip() or DEFAULT_LLM_MODEL
     if embed_model is not None:
@@ -112,8 +145,25 @@ def update_ai_config(
         row.temperature = max(0.0, min(1.0, float(temperature)))
     if max_output_tokens is not None:
         row.max_output_tokens = max(512, min(4096, int(max_output_tokens)))
-    if embed_dims is not None:
-        row.embed_dims = max(256, min(4096, int(embed_dims)))
+    if effective_embed_source == "openai":
+        # Keep dimensions aligned with active OpenAI embedding model in this app.
+        row.embed_dims = OPENAI_EMBED_DIMS
+    elif effective_embed_source == "ollama":
+        previous_was_ollama = previous_embed_source == "ollama"
+        fallback_dims = (
+            embed_dims
+            if embed_dims is not None
+            else getattr(row, "embed_dims", None) if previous_was_ollama else OLLAMA_EMBED_DIMS
+        )
+        desired_dims = resolve_ollama_embed_dims(
+            row.embed_model,
+            fallback_dims,
+        )
+        row.embed_dims = desired_dims
+    elif embed_dims is not None:
+        row.embed_dims = _clamp_embed_dims(embed_dims)
+    elif row.embed_dims is None:
+        row.embed_dims = OLLAMA_EMBED_DIMS
 
     db.commit()
     db.refresh(row)
@@ -138,20 +188,29 @@ def validate_openai_key(api_key: str) -> bool:
 
 
 def ensure_ollama_model(model: str) -> dict:
-    """Ensure Ollama model is available; pull if missing. Returns { status, error? }."""
+    """Ensure Ollama model is available; pull if missing. Returns { status: 'ok' } or { status: 'error', error: '...' }."""
     if not model or not str(model).strip():
         return {"status": "error", "error": "Model name is required"}
     name = str(model).strip()
     if not OLLAMA_URL:
-        return {"status": "error", "error": "Ollama URL not configured (LLM_URL)"}
+        return {"status": "error", "error": "Ollama URL not configured"}
     try:
         with httpx.Client(timeout=300) as client:
-            resp = client.post(f"{OLLAMA_URL}/api/pull", json={"name": name})
+            resp = client.post(
+                f"{OLLAMA_URL}/api/pull",
+                json={"model": name, "stream": False},
+            )
             if resp.status_code != 200:
                 return {"status": "error", "error": resp.text or f"HTTP {resp.status_code}"}
-            return {"status": "ok"}
+            data = resp.json()
+            status = data.get("status", "")
+            if status == "success":
+                return {"status": "ok"}
+            return {"status": "error", "error": status or "Pull failed"}
+    except httpx.TimeoutException:
+        return {"status": "error", "error": "Ollama request timed out"}
     except Exception as e:
-        log.debug("ensure_ollama_model failed: %s", e)
+        log.debug("Ollama ensure-model failed: %s", e)
         return {"status": "error", "error": str(e)}
 
 

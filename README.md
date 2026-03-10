@@ -137,7 +137,7 @@ ollama create jobseeker-advisor -f Modelfile
 # Then set LLM_MODEL=jobseeker-advisor in backend env or via AI Config
 ```
 
-**RAG (vector search):** When `RAG_ENABLED=true` and Elasticsearch is running, resume analysis uses semantic search to find additional job matches. After importing jobs, run `POST /api/v1/jobs/sync-embeddings` (or use the streaming endpoint for progress). Pull the embedding model: `docker compose exec ollama ollama pull nomic-embed-text`.
+**RAG (vector search):** When `RAG_ENABLED=true` and Elasticsearch is running, resume analysis uses semantic search to find additional job matches. After importing jobs, run `POST /api/v1/jobs/sync-embeddings` (or use the streaming endpoint for progress). Pull the embedding model: `docker compose exec ollama ollama pull all-minilm`.
 
 **Resume recommendations:** After analysis, the app fetches hybrid search (RAG) job recommendations via `POST /api/v1/resume/recommendations`. Requires embeddings synced and RAG enabled.
 
@@ -315,8 +315,8 @@ Copy `.env.example` to `.env` and adjust. See `.env.example` for all variables.
 | `LLM_SUMMARIZE_TIMEOUT` | Timeout for on-demand summarize (default: 90). Increase on small containers.                                                             |
 | `LLM_MAX_OUTPUT_TOKENS` | Max tokens for summary output (default: 1024). Lower values help avoid 500 errors on small models or low-memory systems.                 |
 | `ELASTICSEARCH_URL`     | Elasticsearch URL for RAG (default: `http://localhost:9200`).                                                                            |
-| `EMBED_MODEL`           | Ollama embedding model (default: `nomic-embed-text`). Overridable via AI Config.                                                         |
-| `EMBED_DIMS`            | Embedding dimensions (default: 768 for nomic-embed-text).                                                                                |
+| `EMBED_MODEL`           | Ollama embedding model (default: `all-minilm`). Overridable via AI Config.                                                               |
+| `EMBED_DIMS`            | Embedding dimensions (default: 384 for all-minilm).                                                                                      |
 | `RAG_ENABLED`           | When `true`, resume analysis merges keyword + semantic matches.                                                                          |
 | `CORS_ORIGINS`          | Comma-separated allowed origins (default: localhost dev URLs).                                                                           |
 | `RATE_LIMIT`            | Global rate limit, e.g. `100/minute` (default: 100/minute).                                                                              |

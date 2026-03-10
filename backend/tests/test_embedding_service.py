@@ -2,8 +2,6 @@
 
 from unittest.mock import MagicMock, patch
 
-import pytest
-
 from app.services import embedding_service
 
 
@@ -83,7 +81,7 @@ def test_is_available_true_when_model_loaded():
     """is_available returns True when model is in /api/tags."""
     mock_resp = MagicMock()
     mock_resp.status_code = 200
-    mock_resp.json.return_value = {"models": [{"name": "nomic-embed-text:latest"}]}
+    mock_resp.json.return_value = {"models": [{"name": "all-minilm:latest"}]}
 
     with (
         patch.object(embedding_service, "EMBED_URL", "http://ollama:11434"),

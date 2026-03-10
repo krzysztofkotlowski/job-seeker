@@ -181,6 +181,57 @@ export interface ResumeRecommendation {
   score?: number;
 }
 
+export interface EmbeddingSyncRun {
+  id: string;
+  status: "queued" | "running" | "completed" | "failed" | "interrupted";
+  mode: "full" | "incremental";
+  unique_only: boolean;
+  embed_source: "ollama" | "openai";
+  embed_model: string;
+  embed_dims: number;
+  db_total_snapshot: number;
+  selection_total: number;
+  target_total: number;
+  processed: number;
+  indexed: number;
+  failed: number;
+  index_alias: string | null;
+  physical_index_name: string | null;
+  celery_task_id: string | null;
+  error_message: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  updated_at: string | null;
+  activated_at: string | null;
+}
+
+export interface EmbeddingStatusResponse {
+  available: boolean;
+  current_db_total: number;
+  run: EmbeddingSyncRun | null;
+  active_run: EmbeddingSyncRun | null;
+  active_index_name: string | null;
+  active_indexed_documents: number;
+  current_config_matches_active: boolean;
+  reindex_required: boolean;
+  legacy_indices: string[];
+}
+
+export type ResumeRecommendationStatus =
+  | "ok"
+  | "fallback"
+  | "reindex_required"
+  | "active_embedding_unavailable"
+  | "unavailable";
+
+export interface ResumeRecommendationsResponse {
+  status: ResumeRecommendationStatus;
+  message?: string | null;
+  recommendations: ResumeRecommendation[];
+  active_run?: EmbeddingSyncRun | null;
+  config_matches_active?: boolean;
+}
+
 export interface ResumeAnalyzeResult {
   extracted_skills: string[];
   match_count: number;

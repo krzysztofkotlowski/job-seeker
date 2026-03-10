@@ -85,7 +85,10 @@ export function SkillsPage() {
     );
   }
 
-  const maxCount = data.top_skills[0]?.count ?? 1;
+  const filteredSkills = data.top_skills.filter(
+    (item) => item.skill != null && String(item.skill).trim(),
+  );
+  const maxCount = filteredSkills[0]?.count ?? 1;
 
   return (
     <Paper sx={{ p: 3 }}>
@@ -129,7 +132,7 @@ export function SkillsPage() {
               if (e.key === "Enter") handleSearch();
             }}
             onBlur={handleSearch}
-            sx={{ width: 200 }}
+            sx={{ width: { xs: "100%", sm: 200 } }}
             slotProps={{
               input: {
                 startAdornment: (
@@ -141,7 +144,7 @@ export function SkillsPage() {
             }}
           />
           {categories.length > 0 && (
-            <FormControl size="small" sx={{ minWidth: 160 }}>
+            <FormControl size="small" sx={{ minWidth: { xs: 0, sm: 160 } }}>
               <InputLabel>Category</InputLabel>
               <Select
                 value={selectedCategory}
@@ -157,7 +160,7 @@ export function SkillsPage() {
               </Select>
             </FormControl>
           )}
-          <FormControl size="small" sx={{ minWidth: 80 }}>
+          <FormControl size="small" sx={{ minWidth: { xs: 0, sm: 80 } }}>
             <InputLabel>Per page</InputLabel>
             <Select
               value={String(perPage)}
@@ -187,14 +190,15 @@ export function SkillsPage() {
           transition: "opacity 0.2s",
         }}
       >
-        {data.top_skills.map((item, idx) => {
+        {filteredSkills.map((item, idx) => {
+          const skillLabel = String(item.skill ?? "").trim() || "(unknown)";
           const pct = Math.round((item.count / maxCount) * 100);
           const reqPct = item.required_count
             ? Math.round((item.required_count / maxCount) * 100)
             : 0;
           const rank = (page - 1) * perPage + idx + 1;
           return (
-            <Box key={item.skill}>
+            <Box key={`${idx}-${skillLabel}`}>
               <Box
                 sx={{
                   display: "flex",
@@ -212,7 +216,7 @@ export function SkillsPage() {
                     #{rank}
                   </Typography>
                   <Typography variant="body2" fontWeight={500}>
-                    {item.skill}
+                    {skillLabel}
                   </Typography>
                 </Box>
                 <Typography variant="caption" color="text.secondary">

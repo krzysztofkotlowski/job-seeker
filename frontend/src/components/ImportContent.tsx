@@ -6,10 +6,17 @@ import Button from "@mui/material/Button";
 import LinearProgress from "@mui/material/LinearProgress";
 import Alert from "@mui/material/Alert";
 import Chip from "@mui/material/Chip";
+import Checkbox from "@mui/material/Checkbox";
 import Collapse from "@mui/material/Collapse";
+import FormControlLabel from "@mui/material/FormControlLabel";
 import Tooltip from "@mui/material/Tooltip";
 import { api } from "../api/client";
-import type { ImportStatus, ImportTask, ImportTaskStatus } from "../api/types";
+import type {
+  EmbeddingStatusResponse,
+  ImportStatus,
+  ImportTask,
+  ImportTaskStatus,
+} from "../api/types";
 
 const STATUS_LABELS: Record<ImportTaskStatus, string> = {
   idle: "Ready",
@@ -39,13 +46,6 @@ const SOURCE_STYLE: Record<
   "justjoin.it": { color: "success", label: "JustJoin.it" },
   "nofluffjobs.com": { color: "primary", label: "NoFluffJobs" },
 };
-
-type EmbeddingStatus = {
-  available: boolean;
-  indexed: number;
-  total: number;
-  syncing?: boolean;
-} | null;
 
 function TaskCard({
   task,
@@ -212,15 +212,14 @@ export function ImportContent() {
   const [status, setStatus] = useState<ImportStatus | null>(null);
   const [starting, setStarting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [embeddingStatus, setEmbeddingStatus] = useState<EmbeddingStatus>(null);
-  const [embeddingSyncing, setEmbeddingSyncing] = useState(false);
-  const [embeddingProgress, setEmbeddingProgress] = useState({
-    indexed: 0,
-    total: 0,
-  });
+  const [embeddingStatus, setEmbeddingStatus] =
+    useState<EmbeddingStatusResponse | null>(null);
+  const [embeddingActionLoading, setEmbeddingActionLoading] = useState(false);
   const [embeddingError, setEmbeddingError] = useState<string | null>(null);
+  const [embeddingUniqueOnly, setEmbeddingUniqueOnly] = useState(false);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const autoResumeDoneRef = useRef(false);
+  const embeddingChoiceInitializedRef = useRef(false);
 
   const fetchStatus = useCallback(async () => {
     try {
@@ -238,12 +237,23 @@ export function ImportContent() {
     try {
       const s = await api.embeddingStatus();
       setEmbeddingStatus(s);
+      if (!embeddingChoiceInitializedRef.current) {
+        const rememberedChoice =
+          s.run?.unique_only ?? s.active_run?.unique_only ?? false;
+        setEmbeddingUniqueOnly(Boolean(rememberedChoice));
+        embeddingChoiceInitializedRef.current = true;
+      }
     } catch {
       setEmbeddingStatus({
         available: false,
-        indexed: 0,
-        total: 0,
-        syncing: false,
+        current_db_total: 0,
+        run: null,
+        active_run: null,
+        active_index_name: null,
+        active_indexed_documents: 0,
+        current_config_matches_active: false,
+        reindex_required: true,
+        legacy_indices: [],
       });
     }
   }, []);
@@ -253,18 +263,12 @@ export function ImportContent() {
   }, [fetchEmbeddingStatus]);
 
   useEffect(() => {
-    const mightBeSyncing =
-      embeddingSyncing ||
-      embeddingStatus?.syncing ||
-      (embeddingStatus &&
-        embeddingStatus.total > 0 &&
-        embeddingStatus.indexed < embeddingStatus.total);
-    if (!mightBeSyncing) return;
-    if (!embeddingStatus?.available && !embeddingSyncing) return;
-    const interval = embeddingSyncing ? 1500 : 3000;
-    const id = setInterval(fetchEmbeddingStatus, interval);
+    const runStatus = embeddingStatus?.run?.status;
+    const isActive = runStatus === "queued" || runStatus === "running";
+    if (!isActive) return;
+    const id = setInterval(fetchEmbeddingStatus, 2000);
     return () => clearInterval(id);
-  }, [embeddingSyncing, embeddingStatus, fetchEmbeddingStatus]);
+  }, [embeddingStatus?.run?.status, fetchEmbeddingStatus]);
 
   useEffect(() => {
     if (!status || autoResumeDoneRef.current || status.running) return;
@@ -399,41 +403,71 @@ export function ImportContent() {
     }
   };
 
-  const handleSyncEmbeddings = async (mode: "full" | "incremental") => {
-    setEmbeddingSyncing(true);
-    setEmbeddingError(null);
-    setEmbeddingProgress({ indexed: 0, total: 0 });
-    try {
-      await api.syncEmbeddingsStream(
-        (indexed, total) => setEmbeddingProgress({ indexed, total }),
-        undefined,
-        mode,
-      );
-      await fetchEmbeddingStatus();
-    } catch (e) {
-      setEmbeddingError(
-        e instanceof Error ? e.message : "Embedding sync failed",
-      );
-    } finally {
-      setEmbeddingSyncing(false);
-    }
-  };
+  const handleSyncEmbeddings = useCallback(
+    async (mode: "full" | "incremental") => {
+      const uniqueOnly = embeddingUniqueOnly;
+      setEmbeddingActionLoading(true);
+      setEmbeddingError(null);
+      try {
+        const run = await api.syncEmbeddings({
+          mode,
+          unique_only: uniqueOnly,
+        });
+        setEmbeddingStatus((prev) =>
+          prev
+            ? { ...prev, run, current_db_total: run.db_total_snapshot }
+            : {
+                available: true,
+                current_db_total: run.db_total_snapshot,
+                run,
+                active_run: null,
+                active_index_name: null,
+                active_indexed_documents: 0,
+                current_config_matches_active: false,
+                reindex_required: mode !== "full",
+                legacy_indices: [],
+              },
+        );
+        await fetchEmbeddingStatus();
+      } catch (e) {
+        setEmbeddingError(
+          e instanceof Error ? e.message : "Embedding sync failed",
+        );
+      } finally {
+        setEmbeddingActionLoading(false);
+      }
+    },
+    [embeddingUniqueOnly, fetchEmbeddingStatus],
+  );
 
   const isRunning = status?.running ?? false;
+  const currentRun = embeddingStatus?.run;
+  const activeRun = embeddingStatus?.active_run;
+  const isEmbeddingRunActive =
+    currentRun?.status === "queued" || currentRun?.status === "running";
+  const progressIndexed = currentRun?.processed ?? 0;
+  const progressTotal = currentRun?.target_total ?? 0;
   const progressPct =
-    embeddingSyncing && embeddingProgress.total > 0
-      ? Math.round((embeddingProgress.indexed / embeddingProgress.total) * 100)
-      : embeddingStatus && embeddingStatus.total > 0
-        ? Math.round((embeddingStatus.indexed / embeddingStatus.total) * 100)
-        : 0;
-  const progressIndexed =
-    embeddingSyncing && embeddingProgress.total > 0
-      ? embeddingProgress.indexed
-      : (embeddingStatus?.indexed ?? 0);
-  const progressTotal =
-    embeddingSyncing && embeddingProgress.total > 0
-      ? embeddingProgress.total
-      : (embeddingStatus?.total ?? 0);
+    progressTotal > 0 ? Math.round((progressIndexed / progressTotal) * 100) : 0;
+  const dbTotal = embeddingStatus?.current_db_total ?? 0;
+  const selectionTotal = currentRun?.selection_total ?? activeRun?.selection_total ?? 0;
+  const selectedUniqueOnly =
+    currentRun?.unique_only ?? activeRun?.unique_only ?? false;
+  const activeIndexedDocuments = embeddingStatus?.active_indexed_documents ?? 0;
+  const activeChoice = activeRun?.unique_only;
+  const incrementalDisabled =
+    embeddingActionLoading ||
+    isEmbeddingRunActive ||
+    !embeddingStatus?.available ||
+    !activeRun ||
+    Boolean(embeddingStatus?.reindex_required) ||
+    (typeof activeChoice === "boolean" && activeChoice !== embeddingUniqueOnly);
+
+  useEffect(() => {
+    if (!isEmbeddingRunActive) return;
+    if (typeof currentRun?.unique_only !== "boolean") return;
+    setEmbeddingUniqueOnly(currentRun.unique_only);
+  }, [currentRun?.id, currentRun?.unique_only, isEmbeddingRunActive]);
 
   return (
     <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
@@ -501,45 +535,63 @@ export function ImportContent() {
           </Typography>
         </Box>
         {embeddingStatus?.available && (
-          <Box
-            sx={{
-              display: "flex",
-              flexWrap: "wrap",
-              gap: 2,
-              alignItems: "center",
-              mb: 2,
-            }}
-          >
-            <Tooltip title="Index only jobs not yet in RAG. Fast for new imports.">
-              <span>
-                <Button
-                  variant="contained"
-                  color="secondary"
-                  size="medium"
-                  onClick={() => handleSyncEmbeddings("incremental")}
-                  disabled={embeddingSyncing || embeddingStatus.syncing}
-                  sx={{ minWidth: 160, fontWeight: 600 }}
-                >
-                  {embeddingSyncing || embeddingStatus.syncing
-                    ? "Syncing..."
-                    : "Add missing jobs"}
-                </Button>
-              </span>
-            </Tooltip>
-            <Tooltip title="Clear index and rebuild from scratch. Use after bulk changes.">
-              <span>
-                <Button
-                  variant="outlined"
-                  color="secondary"
-                  size="medium"
-                  onClick={() => handleSyncEmbeddings("full")}
-                  disabled={embeddingSyncing || embeddingStatus.syncing}
-                  sx={{ minWidth: 140 }}
-                >
-                  Re-index all
-                </Button>
-              </span>
-            </Tooltip>
+          <Box sx={{ mb: 2 }}>
+            <Box
+              sx={{
+                display: "flex",
+                flexWrap: "wrap",
+                gap: 2,
+                alignItems: "center",
+                mb: 1,
+              }}
+            >
+              <Tooltip title="Index only jobs not yet in RAG. Fast for new imports.">
+                <span>
+                  <Button
+                    variant="contained"
+                    color="secondary"
+                    size="medium"
+                    onClick={() => handleSyncEmbeddings("incremental")}
+                    disabled={incrementalDisabled}
+                    sx={{ minWidth: 160, fontWeight: 600 }}
+                  >
+                    {isEmbeddingRunActive
+                      ? "Syncing..."
+                      : "Add missing jobs"}
+                  </Button>
+                </span>
+              </Tooltip>
+              <Tooltip title="Clear index and rebuild from scratch. Use after bulk changes or provider switch.">
+                <span>
+                  <Button
+                    variant="outlined"
+                    color="secondary"
+                    size="medium"
+                    onClick={() => handleSyncEmbeddings("full")}
+                    disabled={embeddingActionLoading || isEmbeddingRunActive}
+                    sx={{ minWidth: 140 }}
+                  >
+                    Re-index all
+                  </Button>
+                </span>
+              </Tooltip>
+            </Box>
+            <FormControlLabel
+              control={
+                <Checkbox
+                  size="small"
+                  checked={embeddingUniqueOnly}
+                  disabled={embeddingActionLoading || isEmbeddingRunActive}
+                  onChange={(e) => setEmbeddingUniqueOnly(e.target.checked)}
+                />
+              }
+              label={
+                <Typography variant="body2" color="text.secondary">
+                  Index only unique jobs by company + title (same as Hide
+                  duplicates in Jobs view)
+                </Typography>
+              }
+            />
           </Box>
         )}
         {embeddingError && (
@@ -547,15 +599,53 @@ export function ImportContent() {
             {embeddingError}
           </Alert>
         )}
+        {embeddingStatus?.available &&
+          embeddingStatus?.reindex_required &&
+          !isEmbeddingRunActive && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              Incremental indexing is disabled because the active vector index
+              does not match the current embedding configuration. Run a full
+              rebuild.
+            </Alert>
+          )}
+        {embeddingStatus?.available &&
+          activeRun &&
+          !embeddingStatus?.current_config_matches_active && (
+            <Alert severity="info" sx={{ mb: 2 }}>
+              Recommendations are currently using an older active index built
+              with {activeRun.embed_model} ({activeRun.embed_dims} dims). They
+              will switch only after a full rebuild completes.
+            </Alert>
+          )}
         {embeddingStatus?.available && (
-          <Box sx={{ display: "flex", alignItems: "center", gap: 2 }}>
+          <Box sx={{ display: "flex", flexDirection: "column", gap: 0.5 }}>
             <Typography variant="body2" color="text.secondary">
-              {embeddingStatus.indexed.toLocaleString()} /{" "}
-              {embeddingStatus.total.toLocaleString()} indexed
+              DB jobs: {dbTotal.toLocaleString()}
             </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Selected scope: {selectionTotal.toLocaleString()}
+              {selectedUniqueOnly ? " (duplicates hidden)" : " (with duplicates)"}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Current run: {progressIndexed.toLocaleString()} /{" "}
+              {progressTotal.toLocaleString()}
+              {currentRun ? ` (${currentRun.status})` : " (idle)"}
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Active vector index: {activeIndexedDocuments.toLocaleString()}
+              {embeddingStatus?.active_index_name
+                ? ` docs (${embeddingStatus.active_index_name})`
+                : " docs"}
+            </Typography>
+            {(embeddingStatus?.legacy_indices?.length ?? 0) > 0 && (
+              <Typography variant="caption" color="text.secondary">
+                Legacy Elasticsearch indices still present:{" "}
+                {embeddingStatus?.legacy_indices?.length ?? 0}
+              </Typography>
+            )}
           </Box>
         )}
-        {(embeddingSyncing || embeddingStatus?.syncing) && (
+        {isEmbeddingRunActive && (
           <Box sx={{ mt: 2 }}>
             <LinearProgress
               variant="determinate"

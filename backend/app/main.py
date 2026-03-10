@@ -1,5 +1,4 @@
 import logging
-import threading
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -47,60 +46,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
-
-def _maybe_sync_embeddings_on_startup():
-    """If Elasticsearch and embedding service are available, sync jobs for RAG in background."""
-    try:
-        from app.services.elasticsearch_service import (
-            _index_for_dims,
-            bulk_index_jobs,
-            is_available,
-            ensure_index,
-            _get_client,
-        )
-        from app.services.embedding_service import is_available as embed_is_available
-        from app.services.ai_config_service import get_ai_config
-        from app.database import SessionLocal
-        from app.models.tables import JobRow
-
-        if not is_available():
-            return
-        if not embed_is_available():
-            log.debug("Startup embedding sync skipped: Ollama/embedding model not ready")
-            return
-        db = SessionLocal()
-        try:
-            ai_cfg = get_ai_config(db)
-            embed_dims = ai_cfg.get("embed_dims")
-            client = _get_client()
-            if not client or not ensure_index(client, embed_dims=embed_dims):
-                return
-            index_name = _index_for_dims(embed_dims)
-            if client.count(index=index_name).get("count", 0) > 0:
-                return
-            rows = db.query(JobRow).all()
-            if rows:
-                embed_model = ai_cfg["embed_model"] if ai_cfg.get("embed_source") != "openai" else None
-                indexed = bulk_index_jobs(rows, embed_model=embed_model, ai_config=ai_cfg)
-                log.info("Startup: synced %d jobs to Elasticsearch for RAG", indexed)
-        finally:
-            db.close()
-    except Exception as e:
-        log.debug("Startup embedding sync skipped: %s", e)
-
-
-def _run_sync_in_background():
-    """Run embedding sync in a background thread so startup is not blocked."""
-    def _run():
-        try:
-            _maybe_sync_embeddings_on_startup()
-        except Exception as e:
-            log.warning("Background embedding sync failed: %s", e)
-    t = threading.Thread(target=_run, daemon=True)
-    t.start()
-
-
 @app.on_event("startup")
 def on_startup():
     try:
@@ -111,8 +56,11 @@ def on_startup():
         from app.migrations import run_migrations
         run_migrations(engine)
         from app.import_engine import recover_interrupted_imports
+        from app.services.embedding_sync_service import recover_interrupted_runs
         recover_interrupted_imports()
-        _run_sync_in_background()
+        interrupted = recover_interrupted_runs()
+        if interrupted:
+            log.info("Marked %d interrupted embedding sync run(s) after startup", interrupted)
         log.info("Startup complete")
     except Exception as e:
         log.exception("Startup failed (DB or migrations): %s", e)
@@ -134,7 +82,7 @@ async def health():
     from app.services.ai_config_service import get_ai_config
     from app.database import SessionLocal
 
-    status: dict = {"status": "ok"}
+    status: dict = {"status": "ok", "resume_available": resume_router is not None}
     try:
         wait_for_db(max_attempts=1, delay=0)
         status["database_available"] = True

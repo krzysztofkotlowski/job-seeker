@@ -30,6 +30,19 @@ chmod +x deploy/scripts/test-and-deploy.sh
 ./deploy/scripts/test-and-deploy.sh kkotlowski@hp-homeserver
 ```
 
+App-only deploy (recommended for frequent code updates; avoids unnecessary DB/search redeploy):
+
+```bash
+chmod +x deploy/scripts/test-and-deploy-app-only.sh
+./deploy/scripts/test-and-deploy-app-only.sh kkotlowski@hp-homeserver
+```
+
+Skip local tests when needed:
+
+```bash
+RUN_TESTS=0 ./deploy/scripts/test-and-deploy-app-only.sh kkotlowski@hp-homeserver
+```
+
 Or deploy without running tests:
 
 ```bash
@@ -48,7 +61,7 @@ Open `http://<server-ip>` in your browser. The frontend serves on port 80 and pr
 |----------|-------------|---------|
 | `POSTGRES_PASSWORD` | PostgreSQL password | `jobseeker` |
 | `LLM_MODEL` | Ollama model for resume summaries | `qwen2.5:7b` |
-| `EMBED_MODEL` | Ollama embedding model for RAG | `nomic-embed-text` |
+| `EMBED_MODEL` | Ollama embedding model for RAG | `all-minilm` |
 | `LLM_MAX_OUTPUT_TOKENS` | Max tokens for AI output | `400` |
 | `RAG_ENABLED` | Enable semantic search | `true` |
 | `KEYCLOAK_ENABLED` | Enable Keycloak auth | `false` |
@@ -83,7 +96,7 @@ The script dumps the local DB, copies it to the server, restores it, and cleans 
 
 ## Ollama models
 
-The `ollama-init` service automatically pulls the embedding model (`nomic-embed-text`) and LLM model (`qwen2.5:7b`) before the backend starts. The deploy script also runs a post-deploy step to ensure models are pulled. **First deploy may take several minutes** while models download.
+The `ollama-init` service automatically pulls the embedding model (`all-minilm`) and LLM model (`qwen2.5:7b`) before the backend starts. The deploy script also runs a post-deploy step to ensure models are pulled. **First deploy may take several minutes** while models download.
 
 To use different models, set `LLM_MODEL` and `EMBED_MODEL` in `.env` before deploying.
 
@@ -92,7 +105,7 @@ To use different models, set `LLM_MODEL` and `EMBED_MODEL` in `.env` before depl
 ```bash
 ssh kkotlowski@hp-homeserver
 cd /opt/jobseeker
-docker compose -f deploy/docker-compose.prod.yml exec ollama ollama pull nomic-embed-text
+docker compose -f deploy/docker-compose.prod.yml exec ollama ollama pull all-minilm
 docker compose -f deploy/docker-compose.prod.yml exec ollama ollama pull qwen2.5:7b
 ```
 
