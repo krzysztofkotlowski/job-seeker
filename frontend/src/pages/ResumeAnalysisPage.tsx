@@ -50,6 +50,8 @@ const ACCEPT = ".pdf";
 const ANALYZE_TIMEOUT_MS = 120000;
 const SUMMARIZE_TIMEOUT_MS = 120000;
 const EMBEDDING_STATUS_POLL_MS = 5000;
+const SKILLS_COLLAPSED_MAX_HEIGHT = 64;
+const SKILLS_OVERFLOW_FALLBACK_COUNT = 12;
 
 const ECHO_PREFIXES = [
   "Format:",
@@ -426,11 +428,14 @@ const RecommendationCard = memo(function RecommendationCard({
   return (
     <Paper
       variant="outlined"
+      data-testid="recommendation-row"
       sx={{
-        p: 2,
+        px: 2,
+        py: 1.5,
         display: "flex",
-        flexDirection: "column",
-        gap: 1,
+        alignItems: "center",
+        justifyContent: "space-between",
+        gap: 1.5,
         transition: "box-shadow 0.2s ease",
         "&:hover": { boxShadow: 1 },
       }}
@@ -438,9 +443,10 @@ const RecommendationCard = memo(function RecommendationCard({
       <Box
         sx={{
           display: "flex",
-          alignItems: "flex-start",
-          justifyContent: "space-between",
-          gap: 1,
+          alignItems: "center",
+          gap: 1.5,
+          flex: 1,
+          minWidth: 0,
         }}
       >
         <Box sx={{ flex: 1, minWidth: 0 }}>
@@ -448,55 +454,55 @@ const RecommendationCard = memo(function RecommendationCard({
             {title}
           </Typography>
           {company && (
-            <Typography variant="body2" color="text.secondary">
+            <Typography variant="body2" color="text.secondary" noWrap>
               {company}
             </Typography>
           )}
         </Box>
-        <Box
-          sx={{
-            flexShrink: 0,
-            display: "flex",
-            flexDirection: "column",
-            alignItems: "flex-end",
-            gap: 0.5,
-          }}
-        >
+        {category && (
           <Chip
-            label={`${relevancePercent}%`}
+            label={category}
             size="small"
-            color="primary"
-            variant="filled"
-            sx={{ fontWeight: 600, fontSize: "0.75rem" }}
+            variant="outlined"
+            sx={{ flexShrink: 0 }}
           />
-          {url && url.startsWith("http") && (
-            <a
-              href={url}
-              target="_blank"
-              rel="noopener noreferrer"
-              style={{
-                display: "inline-flex",
-                alignItems: "center",
-                gap: 4,
-                color: "var(--mui-palette-primary-main)",
-                textDecoration: "none",
-                fontSize: "0.8125rem",
-              }}
-            >
-              <OpenInNewIcon sx={{ fontSize: 16 }} />
-              Open
-            </a>
-          )}
-        </Box>
+        )}
       </Box>
-      {category && (
+      <Box
+        sx={{
+          flexShrink: 0,
+          display: "flex",
+          alignItems: "center",
+          gap: 1,
+        }}
+      >
         <Chip
-          label={category}
+          label={`${relevancePercent}%`}
           size="small"
-          variant="outlined"
-          sx={{ alignSelf: "flex-start" }}
+          color="primary"
+          variant="filled"
+          sx={{ fontWeight: 600, fontSize: "0.75rem" }}
         />
-      )}
+        {url && url.startsWith("http") && (
+          <a
+            href={url}
+            target="_blank"
+            rel="noopener noreferrer"
+            style={{
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 4,
+              color: "var(--mui-palette-primary-main)",
+              textDecoration: "none",
+              fontSize: "0.8125rem",
+              whiteSpace: "nowrap",
+            }}
+          >
+            <OpenInNewIcon sx={{ fontSize: 16 }} />
+            Open
+          </a>
+        )}
+      </Box>
     </Paper>
   );
 });
@@ -530,6 +536,9 @@ export function ResumeAnalysisPage() {
     string | null
   >(null);
   const recommendationsFingerprintRef = useRef<string | null>(null);
+  const skillsTrayRef = useRef<HTMLDivElement | null>(null);
+  const [skillsExpanded, setSkillsExpanded] = useState(false);
+  const [skillsOverflow, setSkillsOverflow] = useState(false);
   const safe = normalizeResult(result);
   const extractedSkills = safe?.extracted_skills;
   const existingRecommendations = safe?.recommendations;
@@ -627,6 +636,29 @@ export function ResumeAnalysisPage() {
   useEffect(() => {
     if (safe?.summary) fetchEmbeddingStatus();
   }, [safe?.summary, fetchEmbeddingStatus]);
+
+  useEffect(() => {
+    if (!safe?.extracted_skills?.length) {
+      setSkillsOverflow(false);
+      return;
+    }
+    const measure = () => {
+      const tray = skillsTrayRef.current;
+      if (!tray) return;
+      const measuredOverflow =
+        tray.scrollHeight > SKILLS_COLLAPSED_MAX_HEIGHT + 1;
+      setSkillsOverflow(
+        measuredOverflow ||
+          safe.extracted_skills.length > SKILLS_OVERFLOW_FALLBACK_COUNT,
+      );
+    };
+    const frame = requestAnimationFrame(measure);
+    window.addEventListener("resize", measure);
+    return () => {
+      cancelAnimationFrame(frame);
+      window.removeEventListener("resize", measure);
+    };
+  }, [safe?.extracted_skills]);
 
   useEffect(() => {
     if (
@@ -727,6 +759,8 @@ export function ResumeAnalysisPage() {
     setRecommendationsNotice(null);
     setRecommendationsStatus(null);
     setRecommendationsMessage(null);
+    setSkillsExpanded(false);
+    setSkillsOverflow(false);
     recommendationsFingerprintRef.current = null;
     setLoading(true);
     const controller = new AbortController();
@@ -910,6 +944,93 @@ export function ResumeAnalysisPage() {
           <Box sx={{ display: "flex", flexDirection: "column", gap: 3 }}>
             <Grow in timeout={350}>
               <Paper
+                data-testid="skills-card"
+                sx={{
+                  p: 2.5,
+                  border: "1px solid",
+                  borderColor: "divider",
+                  transition: "box-shadow 0.3s ease",
+                  "&:hover": { boxShadow: 1 },
+                }}
+              >
+                <Box
+                  sx={{
+                    display: "flex",
+                    alignItems: "flex-start",
+                    justifyContent: "space-between",
+                    gap: 2,
+                    mb: 1.5,
+                  }}
+                >
+                  <Box sx={{ minWidth: 0 }}>
+                    <Typography variant="subtitle1" fontWeight={600}>
+                      Skills from your PDF (in our system) (
+                      {safe.extracted_skills.length})
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Skills we matched directly against the jobs database.
+                    </Typography>
+                  </Box>
+                  <Chip
+                    label={`${safe.extracted_skills.length} skills`}
+                    size="small"
+                    color="primary"
+                    variant="outlined"
+                  />
+                </Box>
+                <Box
+                  ref={skillsTrayRef}
+                  data-testid="skills-tray"
+                  sx={{
+                    display: "flex",
+                    flexWrap: "wrap",
+                    gap: 0.75,
+                    overflow: "hidden",
+                    maxHeight: skillsExpanded
+                      ? "none"
+                      : `${SKILLS_COLLAPSED_MAX_HEIGHT}px`,
+                    transition: "max-height 0.2s ease",
+                  }}
+                >
+                  {safe.extracted_skills.map((k) => (
+                    <Chip
+                      key={k}
+                      label={k}
+                      size="small"
+                      variant="outlined"
+                      color="primary"
+                    />
+                  ))}
+                </Box>
+                {skillsOverflow ? (
+                  <Button
+                    size="small"
+                    onClick={() => setSkillsExpanded((prev) => !prev)}
+                    aria-expanded={skillsExpanded}
+                    sx={{
+                      mt: 1.5,
+                      px: 0,
+                      minWidth: 0,
+                      textTransform: "none",
+                      fontWeight: 600,
+                      alignSelf: "flex-start",
+                    }}
+                  >
+                    {skillsExpanded ? "Show fewer" : "Show all skills"}
+                  </Button>
+                ) : null}
+
+                {safe.message && (
+                  <Alert severity="info" sx={{ mt: 2 }}>
+                    {safe.message}
+                  </Alert>
+                )}
+              </Paper>
+            </Grow>
+
+            <Grow in timeout={450}>
+              <Paper
+                data-testid="ai-card"
                 elevation={2}
                 sx={{
                   p: 3,
@@ -928,69 +1049,6 @@ export function ResumeAnalysisPage() {
                   <AutoAwesomeIcon color="primary" fontSize="small" />
                   AI Summary & Recommendations
                 </Typography>
-                {safe.summary ? (
-                  <Box
-                    sx={{
-                      "& h1": {
-                        fontSize: "1.25rem",
-                        fontWeight: 600,
-                        mt: 2,
-                        mb: 1,
-                      },
-                      "& h2": {
-                        fontSize: "1.1rem",
-                        fontWeight: 600,
-                        mt: 2,
-                        mb: 1,
-                      },
-                      "& h3": {
-                        fontSize: "1rem",
-                        fontWeight: 600,
-                        mt: 1.5,
-                        mb: 0.5,
-                      },
-                      "& p": { mb: 1 },
-                      "& ul": { pl: 2, mb: 1 },
-                      "& ol": { pl: 2, mb: 1 },
-                      "& li": { mb: 0.25 },
-                      "& strong": { fontWeight: 600 },
-                      "& a": {
-                        color: "primary.main",
-                        textDecoration: "underline",
-                      },
-                      "& code": {
-                        fontFamily: "monospace",
-                        bgcolor: "action.hover",
-                        px: 0.5,
-                        borderRadius: 0.5,
-                      },
-                      "& pre": {
-                        overflow: "auto",
-                        p: 1.5,
-                        borderRadius: 1,
-                        bgcolor: "action.hover",
-                      },
-                      lineHeight: 1.7,
-                    }}
-                  >
-                    <ReactMarkdown
-                      remarkPlugins={[remarkGfm]}
-                      components={{
-                        a: ({ href, children }) => (
-                          <a
-                            href={href}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                          >
-                            {children}
-                          </a>
-                        ),
-                      }}
-                    >
-                      {formatSummaryForMarkdown(safe.summary)}
-                    </ReactMarkdown>
-                  </Box>
-                ) : null}
                 {recommendationsNotice ? (
                   <Alert severity={recommendationsNotice.severity} sx={{ mt: 3 }}>
                     {recommendationsNotice.message}
@@ -1005,16 +1063,7 @@ export function ResumeAnalysisPage() {
                     >
                       Recommended jobs (hybrid search)
                     </Typography>
-                    <Box
-                      sx={{
-                        display: "grid",
-                        gridTemplateColumns: {
-                          xs: "1fr",
-                          sm: "repeat(2, 1fr)",
-                        },
-                        gap: 2,
-                      }}
-                    >
+                    <Box sx={{ display: "flex", flexDirection: "column", gap: 1 }}>
                       {(() => {
                         const recs = safe.recommendations;
                         const scores = recs
@@ -1073,75 +1122,115 @@ export function ResumeAnalysisPage() {
                     {recommendationCaption}
                   </Typography>
                 ) : null}
-                {!safe.summary && (
-                  <Box>
-                    <Typography
-                      variant="body2"
-                      color="text.secondary"
-                      sx={{ mb: 2 }}
-                    >
-                      Get personalized career advice based on your resume and
-                      job market matches.
-                    </Typography>
-                    <Button
-                      variant="contained"
-                      startIcon={<AutoAwesomeIcon />}
-                      onClick={handleSummarize}
-                      disabled={
-                        summaryLoading || safe.extracted_skills.length === 0
-                      }
-                      sx={{ textTransform: "none", fontWeight: 600 }}
-                    >
-                      {summaryLoading ? "Generating..." : "Generate AI summary"}
-                    </Button>
-                    {summaryLoading && (
-                      <LinearProgress sx={{ mt: 2, borderRadius: 1 }} />
-                    )}
-                    {summaryError && (
-                      <Alert
-                        severity="error"
-                        sx={{ mt: 2 }}
-                        onClose={() => setSummaryError(null)}
+                <Box sx={{ mt: 3 }}>
+                  {!safe.summary && (
+                    <Box>
+                      <Typography
+                        variant="body2"
+                        color="text.secondary"
+                        sx={{ mb: 2 }}
                       >
-                        {summaryError}
-                      </Alert>
-                    )}
-                  </Box>
-                )}
-              </Paper>
-            </Grow>
-
-            <Grow in timeout={450}>
-              <Paper sx={{ p: 3, transition: "box-shadow 0.3s ease" }}>
-                <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 2 }}>
-                  Skills from your PDF (in our system) (
-                  {safe.extracted_skills.length})
-                </Typography>
-                <Box
-                  sx={{ display: "flex", flexWrap: "wrap", gap: 0.5, mb: 3 }}
-                >
-                  {safe.extracted_skills.slice(0, 80).map((k) => (
-                    <Chip
-                      key={k}
-                      label={k}
-                      size="small"
-                      variant="outlined"
-                      color="primary"
-                    />
-                  ))}
-                  {safe.extracted_skills.length > 80 && (
-                    <Chip
-                      label={`+${safe.extracted_skills.length - 80} more`}
-                      size="small"
-                    />
+                        Get personalized career advice based on your resume and
+                        job market matches.
+                      </Typography>
+                      <Button
+                        variant="contained"
+                        startIcon={<AutoAwesomeIcon />}
+                        onClick={handleSummarize}
+                        disabled={
+                          summaryLoading || safe.extracted_skills.length === 0
+                        }
+                        sx={{ textTransform: "none", fontWeight: 600 }}
+                      >
+                        {summaryLoading ? "Generating..." : "Generate AI summary"}
+                      </Button>
+                    </Box>
+                  )}
+                  {summaryLoading && (
+                    <LinearProgress sx={{ mt: 2, borderRadius: 1 }} />
+                  )}
+                  {summaryError && (
+                    <Alert
+                      severity="error"
+                      sx={{ mt: 2 }}
+                      onClose={() => setSummaryError(null)}
+                    >
+                      {summaryError}
+                    </Alert>
                   )}
                 </Box>
-
-                {safe.message && (
-                  <Alert severity="info" sx={{ mb: 2 }}>
-                    {safe.message}
-                  </Alert>
-                )}
+                {safe.summary ? (
+                  <Box sx={{ mt: 3 }}>
+                    <Typography
+                      variant="subtitle2"
+                      fontWeight={600}
+                      sx={{ mb: 1.5 }}
+                    >
+                      AI summary
+                    </Typography>
+                    <Box
+                      sx={{
+                        "& h1": {
+                          fontSize: "1.25rem",
+                          fontWeight: 600,
+                          mt: 2,
+                          mb: 1,
+                        },
+                        "& h2": {
+                          fontSize: "1.1rem",
+                          fontWeight: 600,
+                          mt: 2,
+                          mb: 1,
+                        },
+                        "& h3": {
+                          fontSize: "1rem",
+                          fontWeight: 600,
+                          mt: 1.5,
+                          mb: 0.5,
+                        },
+                        "& p": { mb: 1 },
+                        "& ul": { pl: 2, mb: 1 },
+                        "& ol": { pl: 2, mb: 1 },
+                        "& li": { mb: 0.25 },
+                        "& strong": { fontWeight: 600 },
+                        "& a": {
+                          color: "primary.main",
+                          textDecoration: "underline",
+                        },
+                        "& code": {
+                          fontFamily: "monospace",
+                          bgcolor: "action.hover",
+                          px: 0.5,
+                          borderRadius: 0.5,
+                        },
+                        "& pre": {
+                          overflow: "auto",
+                          p: 1.5,
+                          borderRadius: 1,
+                          bgcolor: "action.hover",
+                        },
+                        lineHeight: 1.7,
+                      }}
+                    >
+                      <ReactMarkdown
+                        remarkPlugins={[remarkGfm]}
+                        components={{
+                          a: ({ href, children }) => (
+                            <a
+                              href={href}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                            >
+                              {children}
+                            </a>
+                          ),
+                        }}
+                      >
+                        {formatSummaryForMarkdown(safe.summary)}
+                      </ReactMarkdown>
+                    </Box>
+                  </Box>
+                ) : null}
               </Paper>
             </Grow>
 

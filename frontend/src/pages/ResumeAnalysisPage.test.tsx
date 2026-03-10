@@ -123,6 +123,58 @@ describe("ResumeAnalysisPage", () => {
     expect(CHART_MAX_HEIGHT).toBe(1200);
   });
 
+  it("renders a compact skills card above the AI section and supports expansion", async () => {
+    vi.mocked(api.resumeAnalyze).mockResolvedValue({
+      extracted_skills: [
+        "Python",
+        "Django",
+        "FastAPI",
+        "PostgreSQL",
+        "Docker",
+        "Kubernetes",
+        "Redis",
+        "Celery",
+        "AWS",
+        "Terraform",
+        "TypeScript",
+        "React",
+        "Node.js",
+        "GraphQL",
+      ],
+      match_count: 0,
+      matches: [],
+      by_category: [],
+    });
+
+    renderWithRouter(<ResumeAnalysisPage />);
+    await waitFor(() => expect(api.listCategories).toHaveBeenCalled());
+
+    const user = userEvent.setup();
+    const file = new File(["fake pdf content"], "resume.pdf", {
+      type: "application/pdf",
+    });
+    const input = document.getElementById("resume-upload") as HTMLInputElement;
+    await user.upload(input, file);
+
+    await waitFor(() => expect(api.resumeAnalyze).toHaveBeenCalled());
+
+    const skillsCard = screen.getByTestId("skills-card");
+    const aiCard = screen.getByTestId("ai-card");
+    expect(
+      skillsCard.compareDocumentPosition(aiCard) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+
+    const toggle = await screen.findByRole("button", {
+      name: /show all skills/i,
+    });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    await user.click(toggle);
+    expect(
+      await screen.findByRole("button", { name: /show fewer/i }),
+    ).toHaveAttribute("aria-expanded", "true");
+  });
+
   it("retries recommendations automatically after indexing finishes", async () => {
     vi.mocked(api.embeddingStatus)
       .mockResolvedValueOnce({
@@ -265,6 +317,173 @@ describe("ResumeAnalysisPage", () => {
       await screen.findByText(/Senior Python Developer/i),
     ).toBeInTheDocument();
   }, 10000);
+
+  it("renders recommendations as rows and places the summary button below them", async () => {
+    vi.mocked(api.embeddingStatus).mockResolvedValue({
+      available: true,
+      current_db_total: 100,
+      run: null,
+      active_run: {
+        id: "run-1",
+        status: "completed",
+        mode: "full",
+        unique_only: true,
+        embed_source: "ollama",
+        embed_model: "nomic-embed-text",
+        embed_dims: 768,
+        db_total_snapshot: 100,
+        selection_total: 50,
+        target_total: 50,
+        processed: 50,
+        indexed: 50,
+        failed: 0,
+        index_alias: "jobseeker_jobs_active",
+        physical_index_name: "jobseeker_jobs_run_1",
+        celery_task_id: "celery-1",
+        error_message: null,
+        started_at: null,
+        finished_at: null,
+        updated_at: null,
+        activated_at: "2026-03-10T19:53:28Z",
+      },
+      active_index_name: "jobseeker_jobs_active",
+      active_indexed_documents: 50,
+      current_config_matches_active: true,
+      reindex_required: false,
+      legacy_indices: [],
+    });
+    vi.mocked(api.resumeAnalyze).mockResolvedValue({
+      extracted_skills: ["Python", "Docker"],
+      match_count: 0,
+      matches: [],
+      by_category: [],
+    });
+    vi.mocked(api.resumeRecommendations).mockResolvedValue({
+      status: "ok",
+      recommendations: [
+        {
+          job: {
+            id: "job-1",
+            title: "Senior Python Developer",
+            company: "Acme",
+            url: "https://example.com/job-1",
+            category: "Backend",
+          },
+          score: 0.9,
+        },
+        {
+          job: {
+            id: "job-2",
+            title: "Platform Engineer",
+            company: "Beta",
+            url: "https://example.com/job-2",
+            category: "Infrastructure",
+          },
+          score: 0.7,
+        },
+      ],
+    });
+
+    renderWithRouter(<ResumeAnalysisPage />);
+    await waitFor(() => expect(api.listCategories).toHaveBeenCalled());
+
+    const user = userEvent.setup();
+    const file = new File(["fake pdf content"], "resume.pdf", {
+      type: "application/pdf",
+    });
+    const input = document.getElementById("resume-upload") as HTMLInputElement;
+    await user.upload(input, file);
+
+    await waitFor(() => expect(api.resumeRecommendations).toHaveBeenCalled());
+    expect(await screen.findAllByTestId("recommendation-row")).toHaveLength(2);
+
+    const firstRow = screen.getAllByTestId("recommendation-row")[0];
+    const generateButton = screen.getByRole("button", {
+      name: /generate ai summary/i,
+    });
+    expect(
+      firstRow.compareDocumentPosition(generateButton) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
+
+  it("renders the AI summary below the recommendation list", async () => {
+    vi.mocked(api.embeddingStatus).mockResolvedValue({
+      available: true,
+      current_db_total: 100,
+      run: null,
+      active_run: {
+        id: "run-1",
+        status: "completed",
+        mode: "full",
+        unique_only: true,
+        embed_source: "ollama",
+        embed_model: "nomic-embed-text",
+        embed_dims: 768,
+        db_total_snapshot: 100,
+        selection_total: 50,
+        target_total: 50,
+        processed: 50,
+        indexed: 50,
+        failed: 0,
+        index_alias: "jobseeker_jobs_active",
+        physical_index_name: "jobseeker_jobs_run_1",
+        celery_task_id: "celery-1",
+        error_message: null,
+        started_at: null,
+        finished_at: null,
+        updated_at: null,
+        activated_at: "2026-03-10T19:53:28Z",
+      },
+      active_index_name: "jobseeker_jobs_active",
+      active_indexed_documents: 50,
+      current_config_matches_active: true,
+      reindex_required: false,
+      legacy_indices: [],
+    });
+    vi.mocked(api.resumeAnalyze).mockResolvedValue({
+      extracted_skills: ["Python"],
+      match_count: 0,
+      matches: [],
+      by_category: [],
+      summary: "Strong backend fit for Python platform roles.",
+    });
+    vi.mocked(api.resumeRecommendations).mockResolvedValue({
+      status: "ok",
+      recommendations: [
+        {
+          job: {
+            id: "job-1",
+            title: "Senior Python Developer",
+            company: "Acme",
+            url: "https://example.com/job-1",
+            category: "Backend",
+          },
+          score: 0.9,
+        },
+      ],
+    });
+
+    renderWithRouter(<ResumeAnalysisPage />);
+    await waitFor(() => expect(api.listCategories).toHaveBeenCalled());
+
+    const user = userEvent.setup();
+    const file = new File(["fake pdf content"], "resume.pdf", {
+      type: "application/pdf",
+    });
+    const input = document.getElementById("resume-upload") as HTMLInputElement;
+    await user.upload(input, file);
+
+    await waitFor(() => expect(api.resumeRecommendations).toHaveBeenCalled());
+    const firstRow = screen.getAllByTestId("recommendation-row")[0];
+    const summaryHeading = await screen.findByRole("heading", {
+      name: /^AI summary$/i,
+    });
+    expect(
+      firstRow.compareDocumentPosition(summaryHeading) &
+        Node.DOCUMENT_POSITION_FOLLOWING,
+    ).toBeTruthy();
+  });
 
   it("shows a no-active-index message when no active vector docs exist", async () => {
     vi.mocked(api.embeddingStatus).mockResolvedValue({
