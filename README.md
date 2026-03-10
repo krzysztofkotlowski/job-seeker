@@ -110,7 +110,7 @@ flowchart TB
 
 ```bash
 # From project root (--compatibility applies Ollama CPU/memory limits to fix cgroup parsing)
-# Docker Desktop: allocate at least 6GB memory (Settings → Resources) for phi3:mini
+# Docker Desktop: allocate at least 6GB memory (Settings → Resources) for qwen2.5:7b
 docker compose --compatibility up --build
 ```
 
@@ -126,10 +126,10 @@ Default DB: `postgresql://jobseeker:jobseeker@postgres:5432/jobseeker` (inside C
 **LLM summary (optional):** After resume analysis, users can click "Generate AI summary" to get AI-generated career advice. The summary streams as the model generates it and is rendered as markdown with clickable job links. Requires Ollama or OpenAI configured. The `./scripts/test-and-build.sh` script pulls the Ollama model automatically. For manual `docker compose up`:
 
 ```bash
-docker compose exec ollama ollama pull phi3:mini
+docker compose exec ollama ollama pull qwen2.5:7b
 ```
 
-Default model is `phi3:mini`. Use Settings → AI Config to switch to OpenAI or change models. Optional: create a custom model with the project Modelfile:
+Default model is `qwen2.5:7b`. Use Settings → AI Config to switch to OpenAI or change models. Optional: create a custom model with the project Modelfile:
 
 ```bash
 ollama create jobseeker-advisor -f Modelfile
@@ -275,7 +275,7 @@ Copy `.env.example` to `.env` and adjust. See `.env.example` for all variables.
 | `DATABASE_URL`          | PostgreSQL URL (required for backend).                                                                                                   |
 | `ENRICH_ON_IMPORT`      | When set (`1`, `true`, `yes`), NoFluffJobs import fetches each job page for description and nice-to-have skills. Slower but richer data. |
 | `LLM_URL`               | Ollama API URL (e.g. `http://ollama:11434`). If unset, resume summaries use OpenAI when configured.                                      |
-| `LLM_MODEL`             | Model name for summarization (default: `phi3:mini`). Overridable via AI Config.                                                          |
+| `LLM_MODEL`             | Model name for summarization (default: `qwen2.5:7b`). Overridable via AI Config.                                                          |
 | `LLM_TIMEOUT`           | Timeout in seconds for LLM requests (default: 30).                                                                                       |
 | `LLM_SUMMARIZE_TIMEOUT` | Timeout for on-demand summarize (default: 90). Increase on small containers.                                                             |
 | `LLM_MAX_OUTPUT_TOKENS` | Max tokens for summary output (default: 1024). Lower values help avoid 500 errors on small models or low-memory systems.                 |

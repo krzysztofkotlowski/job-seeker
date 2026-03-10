@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.auth import get_current_user_optional, require_auth
 from app.database import get_db
-from app.models.resume import ResumeSummarizeRequest
+from app.models.resume import ResumeRecommendationsRequest, ResumeSummarizeRequest
 from app.services.ai_config_service import get_ai_config
 from app.services.inference_log_service import log_inference
 from app.services.user_service import get_or_create_user
@@ -23,6 +23,7 @@ from app.services.resume_service import (
     build_by_category,
     match_jobs_to_skills,
     merge_keyword_and_semantic_matches,
+    retrieve_hybrid_recommendations,
     retrieve_semantic_matches,
     RAG_ENABLED,
 )
@@ -157,6 +158,27 @@ async def analyze_resume(
         raise HTTPException(500, f"Resume analysis failed: {e!s}")
 
 
+@router.post("/recommendations")
+async def get_recommendations(
+    body: ResumeRecommendationsRequest = Body(...),
+    db: Session = Depends(get_db),
+):
+    """
+    Fetch hybrid search (RAG) recommendations for extracted skills.
+    Returns job recommendations with relevance scores. Requires RAG enabled and embeddings synced.
+    """
+    ai_cfg = get_ai_config(db)
+    embed_model = ai_cfg["embed_model"] if ai_cfg.get("embed_source") != "openai" else None
+    recs = retrieve_hybrid_recommendations(
+        db,
+        set(body.extracted_skills or []),
+        top_k=10,
+        embed_model=embed_model,
+        ai_config=ai_cfg,
+    )
+    return {"recommendations": recs}
+
+
 @router.post("/summarize")
 async def summarize_match(
     body: ResumeSummarizeRequest = Body(...),
@@ -191,7 +213,7 @@ async def summarize_match(
     if summary is None:
         msg = (
             "AI summary unavailable. "
-            + ("Check your OpenAI API key and model." if ai_cfg.get("provider") == "openai" else "Ensure Ollama is running with a model (e.g. ollama pull phi3:mini).")
+            + ("Check your OpenAI API key and model." if ai_cfg.get("provider") == "openai" else "Ensure Ollama is running with a model (e.g. ollama pull qwen2.5:7b).")
         )
         raise HTTPException(503, msg)
 

@@ -29,7 +29,14 @@ import type {
 } from "../api/types";
 import { useToast } from "../contexts/useToast";
 
-const TINY_MODELS = [{ label: "TinyLlama", value: "tinyllama" }];
+const OLLAMA_LLM_OPTIONS = [
+  "qwen2.5:7b",
+  "qwen3:4b",
+  "qwen3:8b",
+  "llama3.2:3b",
+  "phi3:mini",
+];
+const DEFAULT_LLM_MODEL = "qwen2.5:7b";
 
 const EMBED_FAMILIES = ["nomic", "all-minilm", "mxbai", "bge"];
 
@@ -62,6 +69,7 @@ export function AIConfigContent() {
   const [metrics, setMetrics] = useState<AIMetrics | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+  const [ensuringModel, setEnsuringModel] = useState(false);
   const [validating, setValidating] = useState(false);
   const [llmAvailable, setLlmAvailable] = useState<boolean | null>(null);
 
@@ -74,9 +82,15 @@ export function AIConfigContent() {
   const [temperature, setTemperature] = useState(0.3);
   const [maxOutputTokens, setMaxOutputTokens] = useState(1024);
 
+  const fetchModels = (p: AIProvider) => {
+    api
+      .aiListModels(p)
+      .then((res) => setModels(res.models || []))
+      .catch(() => setModels([]));
+  };
+
   useEffect(() => {
     Promise.all([
-      api.aiListModels(),
       api.aiGetConfig(),
       fetch("/api/v1/health")
         .then((r) => r.json())
@@ -85,13 +99,13 @@ export function AIConfigContent() {
         )
         .catch(() => setLlmAvailable(false)),
     ])
-      .then(([modelsRes, cfg]) => {
-        setModels(modelsRes.models || []);
+      .then(([cfg]) => {
+        const p = (cfg.provider as AIProvider) || "ollama";
         setConfig(cfg);
-        setProvider((cfg.provider as AIProvider) || "ollama");
+        setProvider(p);
         setOpenaiLlmModel(cfg.openai_llm_model || "gpt-4o-mini");
         setEmbedSource((cfg.embed_source as AIEmbedSource) || "ollama");
-        setLlmModel(cfg.llm_model);
+        setLlmModel(cfg.llm_model || DEFAULT_LLM_MODEL);
         setEmbedModel(cfg.embed_model);
         setTemperature(cfg.temperature);
         setMaxOutputTokens(cfg.max_output_tokens);
@@ -105,13 +119,17 @@ export function AIConfigContent() {
   }, [toast]);
 
   useEffect(() => {
+    if (!loading) fetchModels(provider);
+  }, [provider, loading]);
+
+  useEffect(() => {
     api
       .aiGetMetrics()
       .then(setMetrics)
       .catch(() => setMetrics(null));
   }, []);
 
-  const handleSave = () => {
+  const handleSave = async () => {
     setSaving(true);
     const payload: AIConfigUpdate = {
       provider,
@@ -120,22 +138,41 @@ export function AIConfigContent() {
       temperature,
       max_output_tokens: maxOutputTokens,
     };
-    if (llmModel?.trim()) payload.llm_model = llmModel.trim();
+    if (provider === "ollama")
+      payload.llm_model = (llmModel || DEFAULT_LLM_MODEL).trim();
     if (embedModel?.trim()) payload.embed_model = embedModel.trim();
     if (provider === "openai" && openaiApiKey.trim()) {
       payload.openai_api_key = openaiApiKey.trim();
     }
-    api
-      .aiUpdateConfig(payload)
-      .then((updated) => {
-        setConfig(updated);
-        setOpenaiApiKey("");
-        toast.showSuccess("AI config saved");
-      })
-      .catch((e) =>
-        toast.showError(e instanceof Error ? e.message : "Failed to save"),
-      )
-      .finally(() => setSaving(false));
+    try {
+      if (provider === "ollama" && payload.llm_model) {
+        setEnsuringModel(true);
+        const ensure = await api.aiEnsureModel(payload.llm_model);
+        setEnsuringModel(false);
+        if (ensure.status === "error") {
+          toast.showError(ensure.error || "Failed to ensure model");
+          setSaving(false);
+          return;
+        }
+      }
+      const updated = await api.aiUpdateConfig(payload);
+      setConfig(updated);
+      setOpenaiApiKey("");
+      toast.showSuccess("AI config saved");
+      if (provider === "ollama") {
+        fetchModels("ollama");
+        fetch("/api/v1/health")
+          .then((r) => r.json())
+          .then((h: { llm_available?: boolean }) =>
+            setLlmAvailable(h.llm_available ?? false),
+          )
+          .catch(() => setLlmAvailable(false));
+      }
+    } catch (e) {
+      toast.showError(e instanceof Error ? e.message : "Failed to save");
+    } finally {
+      setSaving(false);
+    }
   };
 
   const handleReset = () => {
@@ -143,7 +180,7 @@ export function AIConfigContent() {
       setProvider((config.provider as AIProvider) || "ollama");
       setOpenaiLlmModel(config.openai_llm_model || "gpt-4o-mini");
       setEmbedSource((config.embed_source as AIEmbedSource) || "ollama");
-      setLlmModel(config.llm_model);
+      setLlmModel(config.llm_model || DEFAULT_LLM_MODEL);
       setEmbedModel(config.embed_model);
       setTemperature(config.temperature);
       setMaxOutputTokens(config.max_output_tokens);
@@ -157,7 +194,20 @@ export function AIConfigContent() {
     config?.api_key_set === true ||
     (provider === "openai" && openaiApiKey.trim().length > 0);
 
-  const llmModels = models.filter((m) => !isEmbeddingModel(m));
+  const llmModelsFromOllama = models.filter((m) => !isEmbeddingModel(m));
+  const recommendedAsModels = OLLAMA_LLM_OPTIONS.map((name) => ({
+    name,
+    model: name,
+  }));
+  const pulledNames = new Set(llmModelsFromOllama.map((m) => m.name));
+  const llmSelectOptions =
+    provider === "ollama"
+      ? [
+          ...llmModelsFromOllama,
+          ...recommendedAsModels.filter((m) => !pulledNames.has(m.name)),
+        ]
+      : llmModelsFromOllama;
+  const llmSelectValue = llmModel || DEFAULT_LLM_MODEL;
   let embedModels = models.filter((m) => isEmbeddingModel(m));
   if (embedModels.length === 0) embedModels = [...models];
 
@@ -203,7 +253,7 @@ export function AIConfigContent() {
           {llmAvailable === false && (
             <Alert severity="warning">
               Ollama is not available. Start Ollama and pull a model (e.g.
-              ollama pull phi3:mini) to use AI summaries.
+              ollama pull qwen2.5:7b) to use AI summaries.
             </Alert>
           )}
 
@@ -215,16 +265,16 @@ export function AIConfigContent() {
               <FormControl fullWidth size="small">
                 <InputLabel>LLM model</InputLabel>
                 <Select
-                  value={llmModel}
+                  value={llmSelectValue}
                   label="LLM model"
                   onChange={(e: SelectChangeEvent) =>
                     setLlmModel(e.target.value)
                   }
                 >
-                  {llmModels.map((m) => (
+                  {llmSelectOptions.map((m) => (
                     <MenuItem key={m.name} value={m.name}>
                       {m.name}
-                      {m.details?.parameter_size && (
+                      {"details" in m && m.details?.parameter_size && (
                         <Typography
                           component="span"
                           variant="caption"
@@ -235,36 +285,8 @@ export function AIConfigContent() {
                       )}
                     </MenuItem>
                   ))}
-                  {llmModels.length === 0 && (
-                    <MenuItem value={llmModel} disabled>
-                      {llmModel ||
-                        "No models — pull one with ollama pull phi3:mini"}
-                    </MenuItem>
-                  )}
                 </Select>
               </FormControl>
-
-              <Box
-                sx={{
-                  display: "flex",
-                  flexWrap: "wrap",
-                  gap: 1,
-                  alignItems: "center",
-                }}
-              >
-                <Typography variant="body2" color="text.secondary">
-                  Tiny model preset:
-                </Typography>
-                {TINY_MODELS.map((p) => (
-                  <Chip
-                    key={p.value}
-                    label={p.label}
-                    onClick={() => setLlmModel(p.value)}
-                    variant={llmModel === p.value ? "filled" : "outlined"}
-                    size="small"
-                  />
-                ))}
-              </Box>
 
               <FormControl fullWidth size="small">
                 <InputLabel>Embedding model (RAG)</InputLabel>
@@ -490,7 +512,11 @@ export function AIConfigContent() {
             onClick={handleSave}
             disabled={saving || !canSave}
           >
-            {saving ? "Saving…" : "Save"}
+            {saving
+              ? ensuringModel
+                ? "Ensuring model…"
+                : "Saving…"
+              : "Save"}
           </Button>
           <Button variant="outlined" onClick={handleReset} disabled={!config}>
             Reset to saved

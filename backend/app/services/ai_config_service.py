@@ -17,16 +17,7 @@ DEFAULT_MAX_TOKENS = int(os.environ.get("LLM_MAX_OUTPUT_TOKENS", "2048") or "204
 OPENAI_EMBED_DIMS = 1536
 OLLAMA_EMBED_DIMS = int(os.environ.get("EMBED_DIMS", "768") or "768")
 
-# Chat completion models (March 2026) — frontier first, then legacy
 OPENAI_LLM_MODELS = [
-    "gpt-5.4",
-    "gpt-5.4-pro",
-    "gpt-5-mini",
-    "gpt-5-nano",
-    "gpt-5",
-    "gpt-4.1",
-    "gpt-4.1-mini",
-    "gpt-4.1-nano",
     "gpt-4o",
     "gpt-4o-mini",
     "gpt-4-turbo",
@@ -144,6 +135,24 @@ def validate_openai_key(api_key: str) -> bool:
     except Exception as e:
         log.debug("OpenAI key validation failed: %s", e)
         return False
+
+
+def ensure_ollama_model(model: str) -> dict:
+    """Ensure Ollama model is available; pull if missing. Returns { status, error? }."""
+    if not model or not str(model).strip():
+        return {"status": "error", "error": "Model name is required"}
+    name = str(model).strip()
+    if not OLLAMA_URL:
+        return {"status": "error", "error": "Ollama URL not configured (LLM_URL)"}
+    try:
+        with httpx.Client(timeout=300) as client:
+            resp = client.post(f"{OLLAMA_URL}/api/pull", json={"name": name})
+            if resp.status_code != 200:
+                return {"status": "error", "error": resp.text or f"HTTP {resp.status_code}"}
+            return {"status": "ok"}
+    except Exception as e:
+        log.debug("ensure_ollama_model failed: %s", e)
+        return {"status": "error", "error": str(e)}
 
 
 def list_ollama_models() -> dict:

@@ -84,22 +84,22 @@ echo ""
 if [ "$OLLAMA_READY" -eq 0 ]; then
   echo "WARNING: Ollama not reachable after 120s. Resume summaries will be disabled."
   echo "  Start manually: docker compose up -d ollama"
-  echo "  Then pull model: docker compose exec ollama ollama pull phi3:mini"
+  echo "  Then pull model: docker compose exec ollama ollama pull qwen2.5:7b"
 else
-  echo "Removing unused models (keeping phi3 and nomic-embed-text)..."
+  echo "Removing unused models (keeping qwen2.5 and nomic-embed-text)..."
   for full in $(docker compose exec -T ollama ollama list 2>/dev/null | awk 'NR>1 {print $1}'); do
     base="${full%%:*}"
     case "$base" in
-      phi3|nomic-embed-text) ;;
+      qwen2.5|nomic-embed-text) ;;
       *)
         echo "  Removing $full"
         docker compose exec -T ollama ollama rm "$full" 2>/dev/null || true
         ;;
     esac
   done
-  echo "Pulling phi3:mini (for resume AI summary)..."
-  if ! docker compose exec -T ollama ollama pull phi3:mini; then
-    echo "ERROR: Failed to pull phi3:mini. Resume summaries will not work."
+  echo "Pulling qwen2.5:7b (for resume AI summary)..."
+  if ! docker compose exec -T ollama ollama pull qwen2.5:7b; then
+    echo "ERROR: Failed to pull qwen2.5:7b. Resume summaries will not work."
     exit 1
   fi
   echo "Pulling nomic-embed-text (for RAG)..."

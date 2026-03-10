@@ -138,7 +138,7 @@ class AIConfigRow(Base):
     openai_api_key = Column(String(500), nullable=True)
     openai_llm_model = Column(String(100), nullable=False, default="gpt-4o-mini")
     embed_source = Column(String(20), nullable=False, default="ollama")
-    llm_model = Column(String(255), nullable=False, default="phi3:mini")
+    llm_model = Column(String(255), nullable=False, default="qwen2.5:7b")
     embed_model = Column(String(255), nullable=False, default="nomic-embed-text")
     temperature = Column(Float, nullable=False, default=0.3)
     max_output_tokens = Column(Integer, nullable=False, default=1024)

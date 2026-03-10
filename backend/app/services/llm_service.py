@@ -131,7 +131,7 @@ _INJECTION_PATTERNS = (
 )
 _INJECTION_RE = re.compile("|".join(f"({p})" for p in _INJECTION_PATTERNS), re.IGNORECASE)
 
-DEFAULT_LLM_MODEL = "phi3:mini"
+DEFAULT_LLM_MODEL = "qwen2.5:7b"
 
 
 @dataclass
@@ -378,13 +378,17 @@ Write your response: ## Your strongest fields, then 1-2 sentences per category (
     return prompt
 
 
-async def check_ollama_health() -> bool:
+async def check_ollama_health(model: str | None = None) -> bool:
     """
     Verify Ollama is reachable and the chat model is loaded.
+    Uses model from DB when provided, else from env.
     Returns True if healthy, False otherwise.
     """
     cfg = get_llm_config()
     if not cfg.url:
+        return False
+    target_model = (model or cfg.model or "").strip() or cfg.model
+    if not target_model:
         return False
     try:
         async with httpx.AsyncClient(timeout=10) as client:
@@ -393,7 +397,7 @@ async def check_ollama_health() -> bool:
                 return False
             models = resp.json().get("models") or []
             return any(
-                m.get("name", "").startswith(cfg.model) or cfg.model in m.get("name", "")
+                m.get("name", "").startswith(target_model) or target_model in m.get("name", "")
                 for m in models
             )
     except Exception as e:

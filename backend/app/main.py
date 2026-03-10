@@ -155,7 +155,8 @@ async def health():
             else:
                 cfg = get_llm_config()
                 if cfg.url:
-                    status["llm_available"] = await check_ollama_health()
+                    db_model = ai_cfg.get("llm_model") or cfg.model
+                    status["llm_available"] = await check_ollama_health(model=db_model)
                 else:
                     status["llm_available"] = False
         finally:

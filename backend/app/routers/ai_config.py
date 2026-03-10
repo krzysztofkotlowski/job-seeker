@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from app.auth import require_auth
 from app.database import get_db
 from app.services.ai_config_service import (
+    ensure_ollama_model,
     get_ai_config,
     list_ollama_models,
     list_openai_models,
@@ -18,6 +19,12 @@ from app.services.ai_config_service import (
 from app.services.inference_log_service import get_metrics
 
 router = APIRouter()
+
+
+class EnsureModelRequest(BaseModel):
+    """Request body for POST /ai/ensure-model."""
+
+    model: str = Field(..., min_length=1, max_length=255)
 
 
 class ValidateKeyRequest(BaseModel):
@@ -46,12 +53,26 @@ def _sanitize_config_for_response(cfg: dict) -> dict:
 
 
 @router.get("/models")
-def list_models(db: Session = Depends(get_db)):
-    """List available models. Returns Ollama or OpenAI models based on current config."""
+def list_models(
+    provider: str | None = None,
+    db: Session = Depends(get_db),
+):
+    """List available models. Use ?provider=ollama|openai to override config."""
     cfg = get_ai_config(db)
-    if cfg.get("provider") == "openai":
+    p = (provider or cfg.get("provider") or "ollama").strip().lower()
+    if p == "openai":
         return list_openai_models()
     return list_ollama_models()
+
+
+@router.post("/ensure-model")
+def ensure_model(
+    body: EnsureModelRequest,
+    user: Annotated[dict | None, Depends(require_auth)] = None,
+):
+    """Ensure Ollama model is available; pull if missing. Returns { status, error? }."""
+    result = ensure_ollama_model(body.model)
+    return result
 
 
 @router.post("/config/validate-key")

@@ -346,8 +346,18 @@ export const api = {
       },
     ),
 
-  /** List available Ollama models. */
-  aiListModels: () => request<{ models: OllamaModel[] }>("/ai/models"),
+  /** List available models. Pass provider to force ollama or openai list. */
+  aiListModels: (provider?: string) =>
+    request<{ models: OllamaModel[] }>(
+      provider ? `/ai/models?provider=${provider}` : "/ai/models",
+    ),
+
+  /** Ensure Ollama model is available; pull if missing. */
+  aiEnsureModel: (model: string) =>
+    request<{ status: string; error?: string }>("/ai/ensure-model", {
+      method: "POST",
+      body: JSON.stringify({ model }),
+    }),
 
   /** Get current AI config. */
   aiGetConfig: () => request<AIConfig>("/ai/config"),

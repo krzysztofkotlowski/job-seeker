@@ -84,8 +84,8 @@ services:
       - KEYCLOAK_REALM=jobseeker
       - KEYCLOAK_ENABLED=${KEYCLOAK_ENABLED:-false}
       - LLM_URL=http://ollama:11434
-      # LLM: default phi3:mini; change to llama3.2:3b, mistral, etc. for different quality
-      - LLM_MODEL=phi3:mini
+      # LLM: default qwen2.5:7b; change to qwen3:4b, llama3.2:3b, etc. for different quality
+      - LLM_MODEL=qwen2.5:7b
       - LLM_MAX_OUTPUT_TOKENS=400
       - LLM_TIMEOUT=30
       - LLM_SUMMARIZE_TIMEOUT=90
