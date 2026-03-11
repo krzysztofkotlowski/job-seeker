@@ -65,19 +65,37 @@ class ThinLlamaRuntimeClient(SelfHostedRuntimeClient):
             name = str(item.get("name") or item.get("model") or "").strip()
             if not name:
                 continue
+            available = bool(item.get("available"))
+            active = bool(item.get("active"))
+            has_error = bool(item.get("download_error") or item.get("runtime_error"))
+            if has_error:
+                status = "error"
+            elif active and available:
+                status = "active"
+            elif available:
+                status = "installed"
+            else:
+                status = "not_installed"
             normalized = {
                 "name": name,
                 "model": name,
-                "available": bool(item.get("available")),
-                "active": bool(item.get("active")),
+                "available": available,
+                "active": active,
+                "supported": True,
                 "role": item.get("role"),
+                "status": status,
             }
             details = {
-                "status": item.get("download_status"),
+                "status": status,
                 "path": item.get("path"),
+                "runtime_running": bool(item.get("runtime_running")),
+                "runtime_ready": bool(item.get("runtime_ready")),
+                "restart_suppressed": bool(item.get("restart_suppressed")),
             }
             if item.get("download_error"):
                 details["error"] = item.get("download_error")
+            elif item.get("runtime_error"):
+                details["error"] = item.get("runtime_error")
             if any(v for v in details.values()):
                 normalized["details"] = details
             models.append(normalized)
@@ -160,8 +178,25 @@ class OllamaCompatRuntimeClient(SelfHostedRuntimeClient):
             if resp.status_code != 200:
                 return {"models": []}
             payload = resp.json()
+            models: list[dict] = []
+            for item in payload.get("models") or []:
+                name = _normalize_model_name(item.get("name") or item.get("model"))
+                if not name:
+                    continue
+                models.append(
+                    {
+                        "name": name,
+                        "model": name,
+                        "available": True,
+                        "active": False,
+                        "supported": True,
+                        "role": item.get("role"),
+                        "status": "installed",
+                        "details": {"status": "installed"},
+                    }
+                )
             return {
-                "models": payload.get("models") or [],
+                "models": models,
                 "runtime": self.runtime_name,
                 "runtime_info": {
                     "name": self.runtime_name,

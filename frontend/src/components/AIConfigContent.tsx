@@ -29,8 +29,8 @@ import type {
 } from "../api/types";
 import { useToast } from "../contexts/useToast";
 
-const SELF_HOSTED_LLM_OPTIONS = ["qwen2.5:3b"];
 const DEFAULT_LLM_MODEL = "qwen2.5:3b";
+const DEFAULT_EMBED_MODEL = "all-minilm";
 
 const EMBED_FAMILIES = ["nomic", "all-minilm", "mxbai", "bge"];
 
@@ -56,6 +56,74 @@ function isEmbeddingModel(m: SelfHostedModel): boolean {
   if (m.role === "chat") return false;
   const name = (m.name || m.model || "").toLowerCase();
   return EMBED_FAMILIES.some((f) => name.includes(f)) || name.includes("embed");
+}
+
+function getModelName(model: SelfHostedModel): string {
+  return (model.model || model.name || "").trim();
+}
+
+function getModelStatus(model: SelfHostedModel): string {
+  if (model.status) return model.status;
+  if (model.details?.error) return "error";
+  if (model.active && model.available) return "active";
+  if (model.available) return "installed";
+  return "not installed";
+}
+
+function getModelStatusLabel(model: SelfHostedModel): string {
+  switch (getModelStatus(model)) {
+    case "active":
+      return "active";
+    case "installed":
+      return "installed";
+    case "error":
+      return "error";
+    default:
+      return "not installed";
+  }
+}
+
+function formatModelOptionLabel(model: SelfHostedModel): string {
+  const name = getModelName(model);
+  const status = getModelStatusLabel(model);
+  return status ? `${name} · ${status}` : name;
+}
+
+function ensureSelectedModel(
+  models: SelfHostedModel[],
+  selectedName: string,
+  role?: "chat" | "embedding",
+): SelfHostedModel[] {
+  const trimmed = selectedName.trim();
+  if (!trimmed) return models;
+  if (models.some((model) => getModelName(model) === trimmed)) {
+    return models;
+  }
+  return [
+    {
+      name: trimmed,
+      model: trimmed,
+      role,
+      supported: false,
+      available: false,
+      active: false,
+      status: "not_installed",
+      details: {
+        status: "not installed",
+      },
+    },
+    ...models,
+  ];
+}
+
+function sortRuntimeModels(a: SelfHostedModel, b: SelfHostedModel): number {
+  if (Boolean(a.active) !== Boolean(b.active)) {
+    return a.active ? -1 : 1;
+  }
+  if (Boolean(a.available) !== Boolean(b.available)) {
+    return a.available ? -1 : 1;
+  }
+  return getModelName(a).localeCompare(getModelName(b));
 }
 
 export function AIConfigContent() {
@@ -212,38 +280,31 @@ export function AIConfigContent() {
     config?.api_key_set === true ||
     (provider === "openai" && openaiApiKey.trim().length > 0);
 
-  const selfHostedLlmModels = models.filter((m) => !isEmbeddingModel(m));
-  const recommendedAsModels = SELF_HOSTED_LLM_OPTIONS.map((name) => ({
-    name,
-    model: name,
-  }));
-  const pulledNames = new Set(selfHostedLlmModels.map((m) => m.name));
-  const llmSelectOptions =
-    provider === "ollama"
-      ? [
-          ...selfHostedLlmModels,
-          ...recommendedAsModels.filter((m) => !pulledNames.has(m.name)),
-        ]
-      : selfHostedLlmModels;
-  const llmSelectValue = llmModel || DEFAULT_LLM_MODEL;
-  let embedModels = models.filter((m) => isEmbeddingModel(m));
-  if (embedModels.length === 0) embedModels = [...models];
-
-  const embedOptions = [...embedModels];
-  const embedBase = embedModel?.split(":")[0] || "";
-  const embedModelInList = embedOptions.some(
-    (m) =>
-      m.name === embedModel || (embedBase && m.name?.startsWith(embedBase)),
+  const selfHostedLlmModels = [...models]
+    .filter((m) => m.role === "chat" || (!m.role && !isEmbeddingModel(m)))
+    .sort(sortRuntimeModels);
+  const llmSelectValue = (llmModel || DEFAULT_LLM_MODEL).trim();
+  const llmSelectOptions = ensureSelectedModel(
+    selfHostedLlmModels,
+    llmSelectValue,
+    "chat",
   );
-  if (embedModel && !embedModelInList) {
-    embedOptions.unshift({ name: embedModel, model: embedModel });
-  }
+  const selectedLlmOption =
+    llmSelectOptions.find((model) => getModelName(model) === llmSelectValue) ||
+    null;
 
-  const embedSelectValue =
-    embedOptions.find(
-      (m) =>
-        m.name === embedModel || (embedBase && m.name?.startsWith(embedBase)),
-    )?.name ?? embedModel;
+  const embedModels = [...models]
+    .filter((m) => m.role === "embedding" || (!m.role && isEmbeddingModel(m)))
+    .sort(sortRuntimeModels);
+  const embedSelectValue = (embedModel || DEFAULT_EMBED_MODEL).trim();
+  const embedOptions = ensureSelectedModel(
+    embedModels,
+    embedSelectValue,
+    "embedding",
+  );
+  const selectedEmbedOption =
+    embedOptions.find((model) => getModelName(model) === embedSelectValue) ||
+    null;
   const embedConfigDirty =
     (config?.embed_model || "") !== (embedModel || "") ||
     (config?.embed_source || "ollama") !== embedSource;
@@ -289,22 +350,47 @@ export function AIConfigContent() {
                 <Select
                   value={llmSelectValue}
                   label="LLM model"
+                  renderValue={(value) => {
+                    const selected =
+                      llmSelectOptions.find(
+                        (model) => getModelName(model) === value,
+                      ) || selectedLlmOption;
+                    return selected
+                      ? formatModelOptionLabel(selected)
+                      : String(value);
+                  }}
                   onChange={(e: SelectChangeEvent) =>
                     setLlmModel(e.target.value)
                   }
                 >
                   {llmSelectOptions.map((m) => (
-                    <MenuItem key={m.name} value={m.name}>
-                      {m.name}
-                      {"details" in m && m.details?.parameter_size && (
-                        <Typography
-                          component="span"
-                          variant="caption"
-                          sx={{ ml: 1, opacity: 0.7 }}
-                        >
-                          ({m.details.parameter_size})
-                        </Typography>
-                      )}
+                    <MenuItem key={getModelName(m)} value={getModelName(m)}>
+                      <Box
+                        sx={{
+                          width: "100%",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: 2,
+                        }}
+                      >
+                        <Box>
+                          <Typography variant="body2">
+                            {getModelName(m)}
+                          </Typography>
+                          {m.details?.error && (
+                            <Typography variant="caption" color="error">
+                              {m.details.error}
+                            </Typography>
+                          )}
+                        </Box>
+                        <Chip
+                          size="small"
+                          label={getModelStatusLabel(m)}
+                          color={m.active ? "success" : m.available ? "default" : "warning"}
+                          variant={m.active ? "filled" : "outlined"}
+                        />
+                      </Box>
                     </MenuItem>
                   ))}
                 </Select>
@@ -315,13 +401,47 @@ export function AIConfigContent() {
                 <Select
                   value={embedSelectValue}
                   label="Embedding model (RAG)"
+                  renderValue={(value) => {
+                    const selected =
+                      embedOptions.find(
+                        (model) => getModelName(model) === value,
+                      ) || selectedEmbedOption;
+                    return selected
+                      ? formatModelOptionLabel(selected)
+                      : String(value);
+                  }}
                   onChange={(e: SelectChangeEvent) =>
                     setEmbedModel(e.target.value)
                   }
                 >
                   {embedOptions.map((m) => (
-                    <MenuItem key={m.name} value={m.name}>
-                      {m.name}
+                    <MenuItem key={getModelName(m)} value={getModelName(m)}>
+                      <Box
+                        sx={{
+                          width: "100%",
+                          display: "flex",
+                          alignItems: "center",
+                          justifyContent: "space-between",
+                          gap: 2,
+                        }}
+                      >
+                        <Box>
+                          <Typography variant="body2">
+                            {getModelName(m)}
+                          </Typography>
+                          {m.details?.error && (
+                            <Typography variant="caption" color="error">
+                              {m.details.error}
+                            </Typography>
+                          )}
+                        </Box>
+                        <Chip
+                          size="small"
+                          label={getModelStatusLabel(m)}
+                          color={m.active ? "success" : m.available ? "default" : "warning"}
+                          variant={m.active ? "filled" : "outlined"}
+                        />
+                      </Box>
                     </MenuItem>
                   ))}
                   {embedOptions.length === 0 && (
@@ -336,6 +456,16 @@ export function AIConfigContent() {
                   ? "Embedding dims will be re-resolved on save for the selected model."
                   : `Resolved embedding dims: ${config?.embed_dims ?? "unknown"}`}
               </Typography>
+              {selectedLlmOption?.details?.error && (
+                <Alert severity="warning">
+                  Chat model issue: {selectedLlmOption.details.error}
+                </Alert>
+              )}
+              {selectedEmbedOption?.details?.error && (
+                <Alert severity="warning">
+                  Embedding model issue: {selectedEmbedOption.details.error}
+                </Alert>
+              )}
             </Box>
           </Paper>
         </>

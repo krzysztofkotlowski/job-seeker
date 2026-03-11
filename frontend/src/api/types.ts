@@ -262,8 +262,10 @@ export interface SelfHostedModel {
   name: string;
   model?: string;
   role?: "chat" | "embedding";
+  supported?: boolean;
   available?: boolean;
   active?: boolean;
+  status?: "active" | "installed" | "not_installed" | "error";
   modified_at?: string;
   size?: number;
   digest?: string;
@@ -274,6 +276,11 @@ export interface SelfHostedModel {
     parameter_size?: string;
     quantization_level?: string;
     status?: string;
+    path?: string;
+    error?: string;
+    runtime_running?: boolean;
+    runtime_ready?: boolean;
+    restart_suppressed?: boolean;
   };
 }
 

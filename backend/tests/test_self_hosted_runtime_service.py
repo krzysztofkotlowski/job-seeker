@@ -48,7 +48,7 @@ def test_thin_llama_list_models_normalizes_catalog_payload():
                 "role": "chat",
                 "available": True,
                 "active": True,
-                "download_status": "available",
+                "download_status": "downloaded",
                 "path": "/models/qwen.gguf",
             }
         ],
@@ -58,7 +58,35 @@ def test_thin_llama_list_models_normalizes_catalog_payload():
     assert result["runtime"] == "thin-llama"
     assert result["active"]["chat"] == "qwen2.5:3b"
     assert result["models"][0]["available"] is True
+    assert result["models"][0]["supported"] is True
+    assert result["models"][0]["status"] == "active"
     assert result["models"][0]["details"]["path"] == "/models/qwen.gguf"
+
+
+def test_thin_llama_list_models_exposes_supported_but_not_installed_entries():
+    client = ThinLlamaRuntimeClient(
+        "http://thin-llama:8080",
+        runtime_info=RuntimeInfo(name="thin-llama", version="v0.1.0", git_ref="abc123", capabilities=["models.catalog"]),
+    )
+    payload = {
+        "active": {"chat": "qwen2.5:3b", "embedding": "all-minilm"},
+        "models": [
+            {
+                "name": "all-minilm",
+                "role": "embedding",
+                "available": False,
+                "active": False,
+                "download_status": "",
+                "download_error": "",
+                "path": "/models/all-minilm.gguf",
+            }
+        ],
+    }
+    with patch.object(client, "_request", return_value=DummyResponse(200, payload)):
+        result = client.list_models()
+    assert result["models"][0]["supported"] is True
+    assert result["models"][0]["available"] is False
+    assert result["models"][0]["status"] == "not_installed"
 
 
 def test_thin_llama_ensure_model_accepts_already_present_status():

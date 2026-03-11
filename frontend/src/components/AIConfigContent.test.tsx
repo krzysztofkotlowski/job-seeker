@@ -8,7 +8,30 @@ import { ToastProvider } from "../contexts/ToastContext";
 
 vi.mock("../api/client", () => ({
   api: {
-    aiListModels: vi.fn().mockResolvedValue({ models: [] }),
+    aiListModels: vi.fn().mockResolvedValue({
+      models: [
+        {
+          name: "qwen2.5:3b",
+          model: "qwen2.5:3b",
+          role: "chat",
+          available: true,
+          active: true,
+          supported: true,
+          status: "active",
+          details: { status: "active" },
+        },
+        {
+          name: "all-minilm",
+          model: "all-minilm",
+          role: "embedding",
+          available: false,
+          active: false,
+          supported: true,
+          status: "not_installed",
+          details: { status: "not installed" },
+        },
+      ],
+    }),
     aiEnsureModel: vi.fn().mockResolvedValue({ status: "ok" }),
     aiGetConfig: vi.fn().mockResolvedValue({
       provider: "ollama",
@@ -125,5 +148,16 @@ describe("AIConfigContent", () => {
 
     expect(api.aiEnsureModel).toHaveBeenNthCalledWith(1, "qwen2.5:3b");
     expect(api.aiEnsureModel).toHaveBeenNthCalledWith(2, "all-minilm");
+  });
+
+  it("renders supported self-hosted catalog models with availability labels", async () => {
+    renderWithProviders();
+
+    expect(
+      await screen.findByText("qwen2.5:3b · active"),
+    ).toBeInTheDocument();
+    expect(
+      await screen.findByText("all-minilm · not installed"),
+    ).toBeInTheDocument();
   });
 });
