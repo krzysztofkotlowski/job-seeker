@@ -30,9 +30,9 @@ wait_for_runtime() {
       echo "$models_json"
       exit 1
     fi
-    if printf '%s' "$health_json" | grep -q '"runtime_ready":true' &&
-       printf '%s' "$models_json" | grep -Eq '"active":true[^\n]*"role":"chat"[^\n]*"runtime_ready":true' &&
-       printf '%s' "$models_json" | grep -Eq '"active":true[^\n]*"role":"embedding"[^\n]*"runtime_ready":true'; then
+    if printf '%s' "$health_json" | grep -Fq '"runtime_ready":true' &&
+       printf '%s' "$health_json" | grep -Fq "\"chat\":{\"role\":\"chat\",\"model_name\":\"$LLM_MODEL\"" &&
+       printf '%s' "$health_json" | grep -Fq "\"embedding\":{\"role\":\"embedding\",\"model_name\":\"$EMBED_MODEL\""; then
       ready=1
       break
     fi
