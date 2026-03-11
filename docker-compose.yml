@@ -53,6 +53,10 @@ services:
     build:
       context: ${THIN_LLAMA_BUILD_CONTEXT:-../thin-llama}
       dockerfile: Dockerfile
+      args:
+        VERSION: ${THIN_LLAMA_VERSION:-git}
+        COMMIT: ${THIN_LLAMA_GIT_REF:-unknown}
+        BUILD_DATE: ${THIN_LLAMA_BUILD_DATE:-unknown}
     image: thin-llama:job-seeker-local
     ports:
       - "18080:8080"

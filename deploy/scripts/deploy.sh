@@ -22,13 +22,15 @@ readonly PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 readonly DEFAULT_SERVER="${DEPLOY_SERVER:-kkotlowski@hp-homeserver}"
 readonly DEFAULT_PATH="${DEPLOY_PATH:-/opt/jobseeker}"
 readonly DEFAULT_THIN_LLAMA_GIT_URL="https://github.com/krzysztofkotlowski/thin-llama.git"
-readonly DEFAULT_THIN_LLAMA_GIT_REF="bd513e733ac292b18dfd0c26263f513759046dea"
+readonly DEFAULT_THIN_LLAMA_GIT_REF="4ab072fe7e4c64ddc273159027e69e24f33f7b52"
 
 SERVER="${1:-${DEFAULT_SERVER}}"
 REMOTE_PATH="${DEPLOY_PATH:-${DEFAULT_PATH}}"
 REMOTE_THIN_LLAMA_PATH="${REMOTE_THIN_LLAMA_PATH:-$(dirname "${REMOTE_PATH}")/thin-llama}"
 THIN_LLAMA_GIT_URL="${THIN_LLAMA_GIT_URL:-}"
 THIN_LLAMA_GIT_REF="${THIN_LLAMA_GIT_REF:-}"
+THIN_LLAMA_VERSION="${THIN_LLAMA_VERSION:-}"
+THIN_LLAMA_BUILD_DATE="${THIN_LLAMA_BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 
 log() { echo "[deploy]" "$@"; }
 log_err() { echo "[deploy] ERROR:" "$@" >&2; }
@@ -82,16 +84,20 @@ load_thin_llama_git_config() {
 
 load_thin_llama_git_config
 
+if [[ -z "${THIN_LLAMA_VERSION}" ]]; then
+  THIN_LLAMA_VERSION="${THIN_LLAMA_GIT_REF:0:7}"
+fi
+
 log "Fetching thin-llama from Git..."
 ssh "${SERVER}" "set -euo pipefail; mkdir -p '$(dirname "${REMOTE_THIN_LLAMA_PATH}")'; if [ ! -d '${REMOTE_THIN_LLAMA_PATH}/.git' ]; then git clone '${THIN_LLAMA_GIT_URL}' '${REMOTE_THIN_LLAMA_PATH}'; fi; cd '${REMOTE_THIN_LLAMA_PATH}'; git fetch --tags origin; git checkout --detach '${THIN_LLAMA_GIT_REF}'; git submodule update --init --recursive >/dev/null 2>&1 || true"
 
 # --- Deploy on remote ---
 log "Starting services on remote..."
-ssh "${SERVER}" "cd ${REMOTE_PATH} && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f deploy/docker-compose.prod.yml up -d --build --remove-orphans"
+ssh "${SERVER}" "cd ${REMOTE_PATH} && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' THIN_LLAMA_GIT_REF='${THIN_LLAMA_GIT_REF}' THIN_LLAMA_VERSION='${THIN_LLAMA_VERSION}' THIN_LLAMA_BUILD_DATE='${THIN_LLAMA_BUILD_DATE}' docker compose -f deploy/docker-compose.prod.yml up -d --build --remove-orphans"
 
 # --- Ensure thin-llama models (belt-and-suspenders: thin-llama-init in the stack may have run already) ---
 log "Ensuring thin-llama models (embedding + LLM)..."
-ssh "${SERVER}" "cd ${REMOTE_PATH} && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f deploy/docker-compose.prod.yml run --rm thin-llama-init"
+ssh "${SERVER}" "cd ${REMOTE_PATH} && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' THIN_LLAMA_GIT_REF='${THIN_LLAMA_GIT_REF}' THIN_LLAMA_VERSION='${THIN_LLAMA_VERSION}' THIN_LLAMA_BUILD_DATE='${THIN_LLAMA_BUILD_DATE}' docker compose -f deploy/docker-compose.prod.yml run --rm thin-llama-init"
 
 log "Deployment complete."
 log "App should be available at http://<server-ip>"

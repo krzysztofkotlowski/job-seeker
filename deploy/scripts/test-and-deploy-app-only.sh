@@ -22,7 +22,7 @@ readonly DEFAULT_SERVER="${DEPLOY_SERVER:-kkotlowski@hp-homeserver}"
 readonly DEFAULT_PATH="${DEPLOY_PATH:-/opt/jobseeker}"
 readonly COMPOSE_FILE="deploy/docker-compose.prod.yml"
 readonly DEFAULT_THIN_LLAMA_GIT_URL="https://github.com/krzysztofkotlowski/thin-llama.git"
-readonly DEFAULT_THIN_LLAMA_GIT_REF="bd513e733ac292b18dfd0c26263f513759046dea"
+readonly DEFAULT_THIN_LLAMA_GIT_REF="4ab072fe7e4c64ddc273159027e69e24f33f7b52"
 
 SERVER="${1:-${DEFAULT_SERVER}}"
 REMOTE_PATH="${DEPLOY_PATH:-${DEFAULT_PATH}}"
@@ -30,6 +30,8 @@ RUN_TESTS="${RUN_TESTS:-1}"
 readonly REMOTE_THIN_LLAMA_PATH="${REMOTE_THIN_LLAMA_PATH:-$(dirname "${REMOTE_PATH}")/thin-llama}"
 THIN_LLAMA_GIT_URL="${THIN_LLAMA_GIT_URL:-}"
 THIN_LLAMA_GIT_REF="${THIN_LLAMA_GIT_REF:-}"
+THIN_LLAMA_VERSION="${THIN_LLAMA_VERSION:-}"
+THIN_LLAMA_BUILD_DATE="${THIN_LLAMA_BUILD_DATE:-$(date -u +%Y-%m-%dT%H:%M:%SZ)}"
 
 log() { echo "[test-deploy-app-only]" "$@"; }
 err() { echo "[test-deploy-app-only] ERROR:" "$@" >&2; }
@@ -139,12 +141,12 @@ ensure_remote_thin_llama_checkout() {
 ensure_remote_service_running_without_recreate() {
   local service="$1"
   local exists=""
-  exists="$(ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f '${COMPOSE_FILE}' ps -a -q '${service}'" || true)"
+  exists="$(ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' THIN_LLAMA_GIT_REF='${THIN_LLAMA_GIT_REF}' THIN_LLAMA_VERSION='${THIN_LLAMA_VERSION}' THIN_LLAMA_BUILD_DATE='${THIN_LLAMA_BUILD_DATE}' docker compose -f '${COMPOSE_FILE}' ps -a -q '${service}'" || true)"
   if [[ -z "${exists}" ]]; then
     log "Remote ${service} container missing -> creating it once."
-    ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f '${COMPOSE_FILE}' up -d '${service}'"
+    ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' THIN_LLAMA_GIT_REF='${THIN_LLAMA_GIT_REF}' THIN_LLAMA_VERSION='${THIN_LLAMA_VERSION}' THIN_LLAMA_BUILD_DATE='${THIN_LLAMA_BUILD_DATE}' docker compose -f '${COMPOSE_FILE}' up -d '${service}'"
   else
-    ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f '${COMPOSE_FILE}' start '${service}' >/dev/null 2>&1 || true"
+    ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' THIN_LLAMA_GIT_REF='${THIN_LLAMA_GIT_REF}' THIN_LLAMA_VERSION='${THIN_LLAMA_VERSION}' THIN_LLAMA_BUILD_DATE='${THIN_LLAMA_BUILD_DATE}' docker compose -f '${COMPOSE_FILE}' start '${service}' >/dev/null 2>&1 || true"
   fi
 }
 
@@ -155,15 +157,15 @@ deploy_app_only() {
   ensure_remote_service_running_without_recreate redis
 
   log "Deploying thin-llama runtime..."
-  ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f '${COMPOSE_FILE}' up -d --build --remove-orphans thin-llama"
+  ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' THIN_LLAMA_GIT_REF='${THIN_LLAMA_GIT_REF}' THIN_LLAMA_VERSION='${THIN_LLAMA_VERSION}' THIN_LLAMA_BUILD_DATE='${THIN_LLAMA_BUILD_DATE}' docker compose -f '${COMPOSE_FILE}' up -d --build --remove-orphans thin-llama"
 }
 
 bootstrap_remote_self_hosted() {
   log "Bootstrapping thin-llama models..."
-  ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f '${COMPOSE_FILE}' run --rm thin-llama-init"
+  ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' THIN_LLAMA_GIT_REF='${THIN_LLAMA_GIT_REF}' THIN_LLAMA_VERSION='${THIN_LLAMA_VERSION}' THIN_LLAMA_BUILD_DATE='${THIN_LLAMA_BUILD_DATE}' docker compose -f '${COMPOSE_FILE}' run --rm thin-llama-init"
 
   log "Deploying app services only (backend/frontend/worker, no DB/search rebuild)..."
-  ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f '${COMPOSE_FILE}' up -d --build --no-deps --remove-orphans backend frontend worker"
+  ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' THIN_LLAMA_GIT_REF='${THIN_LLAMA_GIT_REF}' THIN_LLAMA_VERSION='${THIN_LLAMA_VERSION}' THIN_LLAMA_BUILD_DATE='${THIN_LLAMA_BUILD_DATE}' docker compose -f '${COMPOSE_FILE}' up -d --build --no-deps --remove-orphans backend frontend worker"
 }
 
 check_remote_backend_health_once() {
@@ -173,7 +175,7 @@ check_remote_backend_health_once() {
   fi
   # Fallback: inside backend container.
   ssh "${SERVER}" \
-    "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f '${COMPOSE_FILE}' exec -T backend python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5)\"" \
+    "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' THIN_LLAMA_GIT_REF='${THIN_LLAMA_GIT_REF}' THIN_LLAMA_VERSION='${THIN_LLAMA_VERSION}' THIN_LLAMA_BUILD_DATE='${THIN_LLAMA_BUILD_DATE}' docker compose -f '${COMPOSE_FILE}' exec -T backend python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5)\"" \
     >/dev/null 2>&1
 }
 
@@ -192,9 +194,9 @@ verify_remote_health() {
 
   err "Remote backend health check failed after retries."
   log "Diagnostics: docker compose ps"
-  ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f '${COMPOSE_FILE}' ps" || true
+  ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' THIN_LLAMA_GIT_REF='${THIN_LLAMA_GIT_REF}' THIN_LLAMA_VERSION='${THIN_LLAMA_VERSION}' THIN_LLAMA_BUILD_DATE='${THIN_LLAMA_BUILD_DATE}' docker compose -f '${COMPOSE_FILE}' ps" || true
   log "Diagnostics: backend logs (last 120 lines)"
-  ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f '${COMPOSE_FILE}' logs --tail=120 backend" || true
+  ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' THIN_LLAMA_GIT_REF='${THIN_LLAMA_GIT_REF}' THIN_LLAMA_VERSION='${THIN_LLAMA_VERSION}' THIN_LLAMA_BUILD_DATE='${THIN_LLAMA_BUILD_DATE}' docker compose -f '${COMPOSE_FILE}' logs --tail=120 backend" || true
   exit 1
 }
 
@@ -216,7 +218,10 @@ main() {
   run_local_tests
   sync_project
   ensure_remote_env
-  load_thin_llama_git_config
+load_thin_llama_git_config
+if [[ -z "${THIN_LLAMA_VERSION}" ]]; then
+  THIN_LLAMA_VERSION="${THIN_LLAMA_GIT_REF:0:7}"
+fi
   ensure_remote_thin_llama_checkout
   deploy_app_only
   bootstrap_remote_self_hosted
