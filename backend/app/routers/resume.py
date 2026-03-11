@@ -17,7 +17,12 @@ from app.services.ai_config_service import get_ai_config
 from app.services.inference_log_service import log_inference
 from app.services.user_service import get_or_create_user
 from app.models.tables import ResumeRow, UserRow
-from app.services.llm_service import summarize_resume_match, summarize_resume_match_stream
+from app.services.llm_service import (
+    LLMRequestError,
+    OpenAIStreamError,
+    summarize_resume_match,
+    summarize_resume_match_stream,
+)
 from app.services.resume_keywords import extract_keywords_from_pdf
 from app.services.resume_service import (
     build_by_category,
@@ -214,15 +219,18 @@ async def summarize_match(
         model = ai_cfg["openai_llm_model"] if ai_cfg.get("provider") == "openai" else ai_cfg["llm_model"]
 
     start = time.perf_counter()
-    summary, eval_count = await summarize_resume_match(
-        extracted_skills,
-        matches,
-        by_category,
-        ai_config=ai_cfg,
-        model=model or None,
-        max_tokens=ai_cfg["max_output_tokens"],
-        temperature=ai_cfg["temperature"],
-    )
+    try:
+        summary, eval_count = await summarize_resume_match(
+            extracted_skills,
+            matches,
+            by_category,
+            ai_config=ai_cfg,
+            model=model or None,
+            max_tokens=ai_cfg["max_output_tokens"],
+            temperature=ai_cfg["temperature"],
+        )
+    except (LLMRequestError, OpenAIStreamError) as e:
+        raise HTTPException(503, str(e)) from e
     latency_ms = int((time.perf_counter() - start) * 1000)
 
     if summary is None:

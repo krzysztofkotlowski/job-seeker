@@ -5,6 +5,8 @@ from unittest.mock import patch
 from app.services.self_hosted_runtime_service import (
     RuntimeInfo,
     ThinLlamaRuntimeClient,
+    get_self_hosted_embedding_dims,
+    get_self_hosted_runtime_status,
     get_runtime_client,
 )
 
@@ -74,6 +76,7 @@ def test_thin_llama_list_models_exposes_supported_but_not_installed_entries():
             {
                 "name": "all-minilm",
                 "role": "embedding",
+                "embedding_dims": 384,
                 "available": False,
                 "active": False,
                 "download_status": "",
@@ -87,6 +90,7 @@ def test_thin_llama_list_models_exposes_supported_but_not_installed_entries():
     assert result["models"][0]["supported"] is True
     assert result["models"][0]["available"] is False
     assert result["models"][0]["status"] == "not_installed"
+    assert result["models"][0]["embedding_dims"] == 384
 
 
 def test_thin_llama_ensure_model_accepts_already_present_status():
@@ -101,3 +105,71 @@ def test_thin_llama_ensure_model_accepts_already_present_status():
     ):
         result = client.ensure_model("all-minilm")
     assert result == {"status": "ok"}
+
+
+def test_thin_llama_reports_model_ready_only_when_runtime_ready():
+    client = ThinLlamaRuntimeClient("http://thin-llama:8080")
+    payload = {
+        "active": {"chat": "qwen2.5:3b"},
+        "models": [
+            {
+                "name": "qwen2.5:3b",
+                "role": "chat",
+                "available": True,
+                "active": True,
+                "runtime_ready": False,
+                "runtime_error": "signal: killed",
+            }
+        ],
+    }
+    with patch.object(client, "_request", return_value=DummyResponse(200, payload)):
+        assert client.is_model_ready("qwen2.5:3b") is False
+
+
+def test_get_self_hosted_embedding_dims_uses_thin_llama_catalog_metadata():
+    payload = {
+        "runtime": "thin-llama",
+        "active": {"embedding": "all-minilm"},
+        "models": [
+            {
+                "name": "all-minilm",
+                "role": "embedding",
+                "available": True,
+                "active": True,
+                "embedding_dims": 384,
+                "runtime_ready": True,
+            }
+        ],
+    }
+    with patch("app.services.self_hosted_runtime_service.SELF_HOSTED_URL", "http://thin-llama:8080"), patch(
+        "app.services.self_hosted_runtime_service.get_runtime_client"
+    ) as get_client:
+        client = ThinLlamaRuntimeClient("http://thin-llama:8080")
+        get_client.return_value = client
+        with patch.object(client, "_request", return_value=DummyResponse(200, payload)):
+            assert get_self_hosted_embedding_dims("all-minilm") == 384
+
+
+def test_thin_llama_runtime_status_reads_health_payload():
+    payload = {
+        "runtime_ready": False,
+        "active": {"chat": "qwen2.5:3b", "embedding": "all-minilm"},
+        "chat": {"model_name": "qwen2.5:3b", "last_error": "signal: killed"},
+        "embedding": {"model_name": "all-minilm", "status_message": "orphaned process"},
+        "runtime": {"name": "thin-llama"},
+    }
+    with patch("app.services.self_hosted_runtime_service.SELF_HOSTED_URL", "http://thin-llama:8080"), patch(
+        "app.services.self_hosted_runtime_service.get_runtime_client"
+    ) as get_client:
+        client = ThinLlamaRuntimeClient("http://thin-llama:8080")
+        get_client.return_value = client
+        with patch.object(client, "_request", return_value=DummyResponse(200, payload)):
+            status = get_self_hosted_runtime_status(
+                selected_chat_model="qwen2.5:3b",
+                selected_embedding_model="all-minilm",
+            )
+    assert status["runtime_name"] == "thin-llama"
+    assert status["runtime_ready"] is False
+    assert status["active_chat_model"] == "qwen2.5:3b"
+    assert status["chat_error"] == "signal: killed"
+    assert status["embedding_error"] == "orphaned process"

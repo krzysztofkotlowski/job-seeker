@@ -22,7 +22,7 @@ readonly PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 readonly DEFAULT_SERVER="${DEPLOY_SERVER:-kkotlowski@hp-homeserver}"
 readonly DEFAULT_PATH="${DEPLOY_PATH:-/opt/jobseeker}"
 readonly DEFAULT_THIN_LLAMA_GIT_URL="https://github.com/krzysztofkotlowski/thin-llama.git"
-readonly DEFAULT_THIN_LLAMA_GIT_REF="4ab072fe7e4c64ddc273159027e69e24f33f7b52"
+readonly DEFAULT_THIN_LLAMA_GIT_REF="b6235a57899ec466e892b9361babf72aaecfcea1"
 
 SERVER="${1:-${DEFAULT_SERVER}}"
 REMOTE_PATH="${DEPLOY_PATH:-${DEFAULT_PATH}}"
@@ -98,6 +98,42 @@ ssh "${SERVER}" "cd ${REMOTE_PATH} && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LL
 # --- Ensure thin-llama models (belt-and-suspenders: thin-llama-init in the stack may have run already) ---
 log "Ensuring thin-llama models (embedding + LLM)..."
 ssh "${SERVER}" "cd ${REMOTE_PATH} && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' THIN_LLAMA_GIT_REF='${THIN_LLAMA_GIT_REF}' THIN_LLAMA_VERSION='${THIN_LLAMA_VERSION}' THIN_LLAMA_BUILD_DATE='${THIN_LLAMA_BUILD_DATE}' docker compose -f deploy/docker-compose.prod.yml run --rm thin-llama-init"
+
+check_remote_backend_health_once() {
+  if ssh "${SERVER}" "health=\$(curl -sf http://127.0.0.1/api/v1/health) && printf '%s' \"\${health}\" | grep -q '\"llm_available\":true'"; then
+    return 0
+  fi
+  ssh "${SERVER}" \
+    "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' THIN_LLAMA_GIT_REF='${THIN_LLAMA_GIT_REF}' THIN_LLAMA_VERSION='${THIN_LLAMA_VERSION}' THIN_LLAMA_BUILD_DATE='${THIN_LLAMA_BUILD_DATE}' docker compose -f deploy/docker-compose.prod.yml exec -T backend python -c \"import json, sys, urllib.request; data=json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5)); sys.exit(0 if data.get('llm_available') else 1)\"" \
+    >/dev/null 2>&1
+}
+
+verify_remote_health() {
+  log "Verifying remote backend health..."
+  for i in $(seq 1 60); do
+    if check_remote_backend_health_once; then
+      log "Remote backend health is OK."
+      return 0
+    fi
+    if [[ "${i}" -eq 1 ]]; then
+      log "Backend not ready yet; waiting..."
+    fi
+    sleep 3
+  done
+
+  log_err "Remote backend health check failed after retries."
+  log "Diagnostics: docker compose ps"
+  ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' THIN_LLAMA_GIT_REF='${THIN_LLAMA_GIT_REF}' THIN_LLAMA_VERSION='${THIN_LLAMA_VERSION}' THIN_LLAMA_BUILD_DATE='${THIN_LLAMA_BUILD_DATE}' docker compose -f deploy/docker-compose.prod.yml ps" || true
+  log "Diagnostics: backend logs (last 120 lines)"
+  ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' THIN_LLAMA_GIT_REF='${THIN_LLAMA_GIT_REF}' THIN_LLAMA_VERSION='${THIN_LLAMA_VERSION}' THIN_LLAMA_BUILD_DATE='${THIN_LLAMA_BUILD_DATE}' docker compose -f deploy/docker-compose.prod.yml logs --tail=120 backend" || true
+  log "Diagnostics: thin-llama /health"
+  ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' THIN_LLAMA_GIT_REF='${THIN_LLAMA_GIT_REF}' THIN_LLAMA_VERSION='${THIN_LLAMA_VERSION}' THIN_LLAMA_BUILD_DATE='${THIN_LLAMA_BUILD_DATE}' docker compose -f deploy/docker-compose.prod.yml exec -T thin-llama curl -sS http://127.0.0.1:8080/health" || true
+  log "Diagnostics: thin-llama /api/models"
+  ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' THIN_LLAMA_GIT_REF='${THIN_LLAMA_GIT_REF}' THIN_LLAMA_VERSION='${THIN_LLAMA_VERSION}' THIN_LLAMA_BUILD_DATE='${THIN_LLAMA_BUILD_DATE}' docker compose -f deploy/docker-compose.prod.yml exec -T thin-llama curl -sS http://127.0.0.1:8080/api/models" || true
+  exit 1
+}
+
+verify_remote_health
 
 log "Deployment complete."
 log "App should be available at http://<server-ip>"

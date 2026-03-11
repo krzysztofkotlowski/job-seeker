@@ -11,12 +11,12 @@ import type {
   ResumeAnalyzeResult,
   ResumeRecommendation,
   ResumeRecommendationsResponse,
-  OllamaModel,
   AIConfig,
   AIConfigUpdate,
   AIMetrics,
   EmbeddingStatusResponse,
   EmbeddingSyncRun,
+  SelfHostedModel,
 } from "./types";
 import { getTokenForRequest } from "../auth/tokenProvider";
 
@@ -34,6 +34,8 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     let err: string;
     if (body?.error?.message) {
       err = body.error.message;
+    } else if (typeof body?.error === "string") {
+      err = body.error;
     } else if (Array.isArray(body?.detail)) {
       err =
         body.detail
@@ -359,7 +361,7 @@ export const api = {
 
   /** List available models. Pass provider to force self-hosted or OpenAI list. */
   aiListModels: (provider?: string) =>
-    request<{ models: OllamaModel[] }>(
+    request<{ models: SelfHostedModel[] }>(
       provider ? `/ai/models?provider=${provider}` : "/ai/models",
     ),
 
@@ -487,8 +489,11 @@ export const api = {
             if (parsed.done && Array.isArray(parsed.recommendations)) {
               recommendations = parsed.recommendations;
             }
-          } catch {
-            // ignore parse errors
+          } catch (error) {
+            if (error instanceof SyntaxError) {
+              continue;
+            }
+            throw error;
           }
         }
       }

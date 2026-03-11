@@ -1,13 +1,14 @@
 import logging
 
-from fastapi import FastAPI
+from fastapi import Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from slowapi import Limiter, _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from slowapi.util import get_remote_address
+from sqlalchemy.orm import Session
 
 from app.config import get_cors_origins, get_rate_limit
-from app.database import engine, Base, wait_for_db
+from app.database import Base, engine, get_db, wait_for_db
 from app.errors import setup_exception_handlers
 from app.routers import ai_config, jobs, skills, imports, backup
 
@@ -77,10 +78,11 @@ if resume_router is not None:
 
 
 @app.get("/api/v1/health")
-async def health():
+async def health(db: Session = Depends(get_db)):
     from app.services.llm_service import check_ollama_health, get_llm_config
     from app.services.ai_config_service import get_ai_config
-    from app.database import SessionLocal
+    from app.services.embedding_service import is_ollama_model_ready
+    from app.services.self_hosted_runtime_service import get_self_hosted_runtime_status
 
     status: dict = {"status": "ok", "resume_available": resume_router is not None}
     try:
@@ -93,23 +95,59 @@ async def health():
         status["elasticsearch_available"] = es_available()
     except ImportError:
         status["elasticsearch_available"] = False
+    ai_cfg = None
+    status["llm_available"] = False
+    status["embedding_available"] = False
     try:
-        db = SessionLocal()
-        try:
-            ai_cfg = get_ai_config(db)
-            if ai_cfg.get("provider") == "openai":
-                status["llm_available"] = bool(ai_cfg.get("api_key_set"))
+        ai_cfg = get_ai_config(db)
+        status["self_hosted"] = {
+            "runtime_name": "self-hosted",
+            "runtime_ready": False,
+            "selected_chat_model": ai_cfg.get("llm_model"),
+            "selected_embedding_model": ai_cfg.get("embed_model"),
+            "active_chat_model": None,
+            "active_embedding_model": None,
+            "chat_error": None,
+            "embedding_error": None,
+        }
+        if ai_cfg.get("provider") == "openai":
+            status["llm_available"] = bool(ai_cfg.get("api_key_set"))
+            status["embedding_available"] = (
+                bool(ai_cfg.get("api_key_set"))
+                if ai_cfg.get("embed_source") == "openai"
+                else is_ollama_model_ready(ai_cfg.get("embed_model"))
+            )
+        else:
+            cfg = get_llm_config()
+            if cfg.url:
+                db_model = ai_cfg.get("llm_model") or cfg.model
+                status["llm_available"] = await check_ollama_health(model=db_model)
+                status["embedding_available"] = (
+                    bool(ai_cfg.get("api_key_set"))
+                    if ai_cfg.get("embed_source") == "openai"
+                    else is_ollama_model_ready(ai_cfg.get("embed_model"))
+                )
             else:
-                cfg = get_llm_config()
-                if cfg.url:
-                    db_model = ai_cfg.get("llm_model") or cfg.model
-                    status["llm_available"] = await check_ollama_health(model=db_model)
-                else:
-                    status["llm_available"] = False
-        finally:
-            db.close()
+                status["embedding_available"] = (
+                    bool(ai_cfg.get("api_key_set"))
+                    if ai_cfg.get("embed_source") == "openai"
+                    else False
+                )
     except Exception:
-        status["llm_available"] = False
+        pass
+
+    if ai_cfg is None:
+        return status
+
+    try:
+        cfg = get_llm_config()
+        if cfg.url:
+            status["self_hosted"] = get_self_hosted_runtime_status(
+                selected_chat_model=ai_cfg.get("llm_model"),
+                selected_embedding_model=ai_cfg.get("embed_model"),
+            )
+    except Exception:
+        pass
     return status
 
 

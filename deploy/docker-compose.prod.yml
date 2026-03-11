@@ -74,41 +74,12 @@ services:
 
   thin-llama-init:
     image: curlimages/curl:8.8.0
-    entrypoint: ["/bin/sh", "-c"]
+    entrypoint: ["/bin/sh", "/thin-llama-init.sh"]
     environment:
       - EMBED_MODEL=${EMBED_MODEL:-all-minilm}
       - LLM_MODEL=${LLM_MODEL:-qwen2.5:3b}
-    command: >
-      echo 'Waiting for thin-llama...';
-      for i in $$(seq 1 30); do
-        if curl -sf http://thin-llama:8080/health >/dev/null; then echo 'thin-llama ready.'; break; fi;
-        sleep 2;
-      done;
-      echo 'Pulling embedding model: '$${EMBED_MODEL};
-      embed_pull_code=$$(curl -sS -o /tmp/embed-pull.out -w "%{http_code}" -X POST http://thin-llama:8080/api/pull -H 'Content-Type: application/json' -d "{\"model\":\"$${EMBED_MODEL}\"}");
-      if [ "$${embed_pull_code}" -lt 200 ] || [ "$${embed_pull_code}" -ge 300 ]; then
-        echo 'Embedding pull failed with status' "$${embed_pull_code}";
-        cat /tmp/embed-pull.out;
-        exit 1;
-      fi;
-      cat /tmp/embed-pull.out;
-      echo 'Pulling chat model: '$${LLM_MODEL};
-      chat_pull_code=$$(curl -sS -o /tmp/chat-pull.out -w "%{http_code}" -X POST http://thin-llama:8080/api/pull -H 'Content-Type: application/json' -d "{\"model\":\"$${LLM_MODEL}\"}");
-      if [ "$${chat_pull_code}" -lt 200 ] || [ "$${chat_pull_code}" -ge 300 ]; then
-        echo 'Chat pull failed with status' "$${chat_pull_code}";
-        cat /tmp/chat-pull.out;
-        exit 1;
-      fi;
-      cat /tmp/chat-pull.out;
-      echo 'Activating models...';
-      activate_code=$$(curl -sS -o /tmp/activate.out -w "%{http_code}" -X POST http://thin-llama:8080/api/models/active -H 'Content-Type: application/json' -d "{\"chat\":\"$${LLM_MODEL}\",\"embedding\":\"$${EMBED_MODEL}\"}");
-      if [ "$${activate_code}" -lt 200 ] || [ "$${activate_code}" -ge 300 ]; then
-        echo 'Model activation failed with status' "$${activate_code}";
-        cat /tmp/activate.out;
-        exit 1;
-      fi;
-      cat /tmp/activate.out;
-      echo 'Models ready.'
+    volumes:
+      - ./scripts/thin-llama-init.sh:/thin-llama-init.sh:ro
     depends_on:
       thin-llama:
         condition: service_healthy

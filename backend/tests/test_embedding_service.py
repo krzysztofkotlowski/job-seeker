@@ -78,21 +78,8 @@ def test_is_available_false_when_no_url():
 
 
 def test_is_available_true_when_model_loaded():
-    """is_available returns True when model is in /api/tags."""
-    mock_resp = MagicMock()
-    mock_resp.status_code = 200
-    mock_resp.json.return_value = {"models": [{"name": "all-minilm:latest"}]}
-
-    with (
-        patch.object(embedding_service, "EMBED_URL", "http://ollama:11434"),
-        patch.object(embedding_service, "httpx") as mock_httpx,
-    ):
-        mock_client = MagicMock()
-        mock_client.__enter__ = MagicMock(return_value=mock_client)
-        mock_client.__exit__ = MagicMock(return_value=False)
-        mock_client.get.return_value = mock_resp
-        mock_httpx.Client.return_value = mock_client
-
+    """is_available returns True when the self-hosted embedding runtime is ready."""
+    with patch.object(embedding_service, "is_ollama_model_ready", return_value=True):
         assert embedding_service.is_available() is True
 
 
@@ -143,3 +130,19 @@ def test_embed_batch_openai_returns_list():
         result = embedding_service.embed_batch(["a", "b"], ai_config=ai_config)
     assert len(result) == 2
     assert len(result[0]) == 1536
+
+
+def test_get_ollama_embedding_dims_prefers_runtime_catalog_metadata():
+    with patch.object(embedding_service, "get_self_hosted_embedding_dims", return_value=384), patch.object(
+        embedding_service, "embed_text"
+    ) as embed_text:
+        assert embedding_service.get_ollama_embedding_dims("all-minilm") == 384
+    embed_text.assert_not_called()
+
+
+def test_get_ollama_embedding_dims_falls_back_to_probe_when_catalog_metadata_missing():
+    with patch.object(embedding_service, "get_self_hosted_embedding_dims", return_value=None), patch.object(
+        embedding_service, "embed_text", return_value=[0.1] * 768
+    ) as embed_text:
+        assert embedding_service.get_ollama_embedding_dims("custom-embed") == 768
+    embed_text.assert_called_once()

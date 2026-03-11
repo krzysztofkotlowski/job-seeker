@@ -22,7 +22,7 @@ readonly DEFAULT_SERVER="${DEPLOY_SERVER:-kkotlowski@hp-homeserver}"
 readonly DEFAULT_PATH="${DEPLOY_PATH:-/opt/jobseeker}"
 readonly COMPOSE_FILE="deploy/docker-compose.prod.yml"
 readonly DEFAULT_THIN_LLAMA_GIT_URL="https://github.com/krzysztofkotlowski/thin-llama.git"
-readonly DEFAULT_THIN_LLAMA_GIT_REF="4ab072fe7e4c64ddc273159027e69e24f33f7b52"
+readonly DEFAULT_THIN_LLAMA_GIT_REF="b6235a57899ec466e892b9361babf72aaecfcea1"
 
 SERVER="${1:-${DEFAULT_SERVER}}"
 REMOTE_PATH="${DEPLOY_PATH:-${DEFAULT_PATH}}"
@@ -170,12 +170,12 @@ bootstrap_remote_self_hosted() {
 
 check_remote_backend_health_once() {
   # Preferred: through frontend reverse proxy (port 80 published in prod).
-  if ssh "${SERVER}" "curl -sf http://127.0.0.1/api/v1/health >/dev/null"; then
+  if ssh "${SERVER}" "health=\$(curl -sf http://127.0.0.1/api/v1/health) && printf '%s' \"\${health}\" | grep -q '\"llm_available\":true'"; then
     return 0
   fi
   # Fallback: inside backend container.
   ssh "${SERVER}" \
-    "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' THIN_LLAMA_GIT_REF='${THIN_LLAMA_GIT_REF}' THIN_LLAMA_VERSION='${THIN_LLAMA_VERSION}' THIN_LLAMA_BUILD_DATE='${THIN_LLAMA_BUILD_DATE}' docker compose -f '${COMPOSE_FILE}' exec -T backend python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5)\"" \
+    "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' THIN_LLAMA_GIT_REF='${THIN_LLAMA_GIT_REF}' THIN_LLAMA_VERSION='${THIN_LLAMA_VERSION}' THIN_LLAMA_BUILD_DATE='${THIN_LLAMA_BUILD_DATE}' docker compose -f '${COMPOSE_FILE}' exec -T backend python -c \"import json, sys, urllib.request; data=json.load(urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5)); sys.exit(0 if data.get('llm_available') else 1)\"" \
     >/dev/null 2>&1
 }
 
@@ -197,6 +197,10 @@ verify_remote_health() {
   ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' THIN_LLAMA_GIT_REF='${THIN_LLAMA_GIT_REF}' THIN_LLAMA_VERSION='${THIN_LLAMA_VERSION}' THIN_LLAMA_BUILD_DATE='${THIN_LLAMA_BUILD_DATE}' docker compose -f '${COMPOSE_FILE}' ps" || true
   log "Diagnostics: backend logs (last 120 lines)"
   ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' THIN_LLAMA_GIT_REF='${THIN_LLAMA_GIT_REF}' THIN_LLAMA_VERSION='${THIN_LLAMA_VERSION}' THIN_LLAMA_BUILD_DATE='${THIN_LLAMA_BUILD_DATE}' docker compose -f '${COMPOSE_FILE}' logs --tail=120 backend" || true
+  log "Diagnostics: thin-llama /health"
+  ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' THIN_LLAMA_GIT_REF='${THIN_LLAMA_GIT_REF}' THIN_LLAMA_VERSION='${THIN_LLAMA_VERSION}' THIN_LLAMA_BUILD_DATE='${THIN_LLAMA_BUILD_DATE}' docker compose -f '${COMPOSE_FILE}' exec -T thin-llama curl -sS http://127.0.0.1:8080/health" || true
+  log "Diagnostics: thin-llama /api/models"
+  ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' THIN_LLAMA_GIT_REF='${THIN_LLAMA_GIT_REF}' THIN_LLAMA_VERSION='${THIN_LLAMA_VERSION}' THIN_LLAMA_BUILD_DATE='${THIN_LLAMA_BUILD_DATE}' docker compose -f '${COMPOSE_FILE}' exec -T thin-llama curl -sS http://127.0.0.1:8080/api/models" || true
   exit 1
 }
 

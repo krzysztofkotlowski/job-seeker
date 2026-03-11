@@ -235,7 +235,7 @@ def _hydrate_hits_to_jobs(
 def _active_embedding_context(db: Session, ai_config: dict | None = None) -> dict:
     """Resolve the active managed recommendation source and whether it is queryable."""
     try:
-        from app.services.embedding_service import is_ollama_model_available
+        from app.services.embedding_service import is_ollama_model_ready
         from app.services.embedding_sync_service import resolve_active_recommendation_source
     except ImportError:
         return {
@@ -274,12 +274,12 @@ def _active_embedding_context(db: Session, ai_config: dict | None = None) -> dic
         resolved["embed_model"] = active_run.embed_model
         return resolved
 
-    if not is_ollama_model_available(active_run.embed_model):
+    if not is_ollama_model_ready(active_run.embed_model):
         resolved.update(
             {
                 "status": "active_embedding_unavailable",
                 "message": (
-                    f"The active embedding model '{active_run.embed_model}' is not available in the self-hosted runtime."
+                    f"The active embedding model '{active_run.embed_model}' is not ready in thin-llama."
                 ),
             }
         )

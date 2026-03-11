@@ -11,6 +11,7 @@ from app.services.embedding_service import get_ollama_embedding_dims
 from app.services.self_hosted_runtime_service import (
     best_effort_activate_self_hosted_models as runtime_best_effort_activate_self_hosted_models,
     ensure_self_hosted_model,
+    is_self_hosted_model_ready,
     list_self_hosted_models,
 )
 
@@ -59,7 +60,7 @@ def resolve_embed_dims(embed_source: str | None, embed_dims: int | None) -> int:
 
 
 def resolve_ollama_embed_dims(embed_model: str | None, fallback_dims: int | None = None) -> int:
-    """Resolve Ollama embedding dims from the selected model, falling back safely when probing fails."""
+    """Resolve self-hosted embedding dims, preferring runtime metadata over live probing."""
     detected = get_ollama_embedding_dims(embed_model)
     if isinstance(detected, int) and detected > 0:
         return detected
@@ -130,7 +131,10 @@ def update_ai_config(
         db.add(row)
         db.flush()
 
+    previous_provider = (getattr(row, "provider", None) or "ollama").strip().lower()
     previous_embed_source = (getattr(row, "embed_source", None) or "ollama").strip().lower()
+    previous_llm_model = (getattr(row, "llm_model", None) or DEFAULT_LLM_MODEL).strip() or DEFAULT_LLM_MODEL
+    previous_embed_model = (getattr(row, "embed_model", None) or DEFAULT_EMBED_MODEL).strip() or DEFAULT_EMBED_MODEL
     effective_embed_source = previous_embed_source
 
     if provider is not None:
@@ -179,10 +183,26 @@ def update_ai_config(
 
     db.commit()
     db.refresh(row)
-    if row.provider == "ollama" or row.embed_source == "ollama":
+    chat_model_to_activate = None
+    if row.provider == "ollama":
+        chat_model = (row.llm_model or DEFAULT_LLM_MODEL).strip() or DEFAULT_LLM_MODEL
+        if previous_provider != "ollama" or previous_llm_model != chat_model or not is_self_hosted_model_ready(chat_model):
+            chat_model_to_activate = chat_model
+
+    embed_model_to_activate = None
+    if row.embed_source == "ollama":
+        active_embed_model = (row.embed_model or DEFAULT_EMBED_MODEL).strip() or DEFAULT_EMBED_MODEL
+        if (
+            previous_embed_source != "ollama"
+            or previous_embed_model != active_embed_model
+            or not is_self_hosted_model_ready(active_embed_model)
+        ):
+            embed_model_to_activate = active_embed_model
+
+    if chat_model_to_activate or embed_model_to_activate:
         _best_effort_activate_self_hosted_models(
-            chat_model=row.llm_model if row.provider == "ollama" else None,
-            embed_model=row.embed_model if row.embed_source == "ollama" else None,
+            chat_model=chat_model_to_activate,
+            embed_model=embed_model_to_activate,
         )
     return get_ai_config(db)
 

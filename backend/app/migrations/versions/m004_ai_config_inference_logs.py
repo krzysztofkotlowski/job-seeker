@@ -11,7 +11,7 @@ def upgrade(conn):
         conn.execute(text("""
             CREATE TABLE ai_config (
                 id SERIAL PRIMARY KEY,
-                llm_model VARCHAR(255) NOT NULL DEFAULT 'phi3:mini',
+                llm_model VARCHAR(255) NOT NULL DEFAULT 'qwen2.5:3b',
                 embed_model VARCHAR(255) NOT NULL DEFAULT 'all-minilm',
                 temperature FLOAT NOT NULL DEFAULT 0.3,
                 max_output_tokens INTEGER NOT NULL DEFAULT 1024,
@@ -20,7 +20,7 @@ def upgrade(conn):
         """))
         conn.execute(text("""
             INSERT INTO ai_config (id, llm_model, embed_model, temperature, max_output_tokens)
-            VALUES (1, 'phi3:mini', 'all-minilm', 0.3, 1024)
+            VALUES (1, 'qwen2.5:3b', 'all-minilm', 0.3, 1024)
         """))
 
     if "inference_logs" not in tables:

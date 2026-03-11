@@ -1,4 +1,4 @@
-"""LLM service: summarize resume-job matches via Ollama API."""
+"""LLM service: summarize resume-job matches via a self-hosted runtime or OpenAI."""
 
 import asyncio
 import json
@@ -10,7 +10,10 @@ from dataclasses import dataclass
 
 import httpx
 
-from app.services.self_hosted_runtime_service import is_self_hosted_model_available
+from app.services.self_hosted_runtime_service import (
+    get_self_hosted_runtime_status,
+    is_self_hosted_model_ready,
+)
 
 log = logging.getLogger(__name__)
 
@@ -22,6 +25,12 @@ _OPENAI_MAX_DELAY = 60
 
 class OpenAIStreamError(Exception):
     """Raised when OpenAI stream fails with a user-friendly message."""
+
+    pass
+
+
+class LLMRequestError(Exception):
+    """Raised when the self-hosted runtime request fails with a user-facing message."""
 
     pass
 
@@ -44,6 +53,24 @@ def _parse_openai_error(response: httpx.Response) -> str:
     except Exception:
         pass
     return f"AI summary failed: HTTP {response.status_code}"
+
+
+def _parse_self_hosted_error(response: httpx.Response) -> str:
+    """Parse self-hosted runtime error payload into a user-friendly message."""
+    try:
+        body = response.json()
+        if isinstance(body, dict):
+            if isinstance(body.get("error"), str) and body["error"].strip():
+                return body["error"].strip()[:300]
+            detail = body.get("detail")
+            if isinstance(detail, str) and detail.strip():
+                return detail.strip()[:300]
+    except Exception:
+        pass
+    text = (response.text or "").strip()
+    if text:
+        return text[:300]
+    return f"Self-hosted runtime error: HTTP {response.status_code}"
 
 
 def _is_retryable_openai_error(exc: BaseException) -> bool:
@@ -382,7 +409,7 @@ Write your response: ## Your strongest fields, then 1-2 sentences per category (
 
 async def check_ollama_health(model: str | None = None) -> bool:
     """
-    Verify Ollama is reachable and the chat model is loaded.
+    Verify the self-hosted runtime is reachable and the active chat model is ready.
     Uses model from DB when provided, else from env.
     Returns True if healthy, False otherwise.
     """
@@ -393,7 +420,7 @@ async def check_ollama_health(model: str | None = None) -> bool:
     if not target_model:
         return False
     try:
-        return is_self_hosted_model_available(target_model)
+        return is_self_hosted_model_ready(target_model)
     except Exception as e:
         log.debug("Self-hosted runtime health check failed: %s", e)
         return False
@@ -542,16 +569,25 @@ async def _chat(
     temperature: float | None = None,
 ) -> str | tuple[str | None, int | None] | None:
     """
-    Low-level Ollama chat. Returns full text when stream=False, None on error.
-    model and temperature override get_llm_config() when provided.
+    Low-level self-hosted chat.
+    Raises LLMRequestError when the runtime is unavailable or returns an error.
     """
     cfg = get_llm_config()
     if not cfg.url:
-        return (None, None) if not stream else None
+        raise LLMRequestError("Self-hosted runtime URL not configured.")
     effective_model = model or cfg.model
     if max_tokens is None:
         max_tokens = cfg.max_output_tokens
     effective_timeout = timeout if timeout is not None else cfg.summarize_timeout
+
+    if effective_model and not is_self_hosted_model_ready(effective_model):
+        runtime_status = get_self_hosted_runtime_status(selected_chat_model=effective_model)
+        detail = (
+            runtime_status.get("chat_error")
+            or runtime_status.get("embedding_error")
+            or f"Selected chat model '{effective_model}' is not ready in the self-hosted runtime."
+        )
+        raise LLMRequestError(str(detail))
 
     options: dict = {"num_predict": max_tokens}
     if temperature is not None:
@@ -594,7 +630,7 @@ async def _chat(
                 return (text, eval_count)
     except httpx.TimeoutException:
         log.warning("LLM request timed out after %ds", effective_timeout)
-        return (None, None)
+        raise LLMRequestError("Self-hosted runtime timed out. Try again.") from None
     except httpx.HTTPStatusError as e:
         err_body = ""
         if hasattr(e, "response") and e.response is not None:
@@ -605,12 +641,12 @@ async def _chat(
         log.warning(
             "LLM API error: %s%s",
             e,
-            f" | Ollama response: {err_body}" if err_body else "",
+            f" | Runtime response: {err_body}" if err_body else "",
         )
-        return (None, None)
+        raise LLMRequestError(_parse_self_hosted_error(e.response)) from e
     except Exception as e:
         log.warning("LLM request failed: %s", e)
-        return (None, None)
+        raise LLMRequestError(f"AI summary failed: {e!s}") from e
 
 
 async def summarize_resume_match(
@@ -717,10 +753,20 @@ async def summarize_resume_match_stream(
 
     cfg = get_llm_config()
     if not cfg.url:
+        yield {"error": "Self-hosted runtime URL not configured."}
         return
 
     effective_model = model or (ai_config or {}).get("llm_model") or cfg.model
     effective_timeout = timeout if timeout is not None else cfg.summarize_timeout
+    if effective_model and not is_self_hosted_model_ready(effective_model):
+        runtime_status = get_self_hosted_runtime_status(selected_chat_model=effective_model)
+        detail = (
+            runtime_status.get("chat_error")
+            or runtime_status.get("embedding_error")
+            or f"Selected chat model '{effective_model}' is not ready in the self-hosted runtime."
+        )
+        yield {"error": str(detail)}
+        return
     options: dict = {"num_predict": effective_max}
     if temperature is not None:
         options["temperature"] = temperature
@@ -754,7 +800,7 @@ async def summarize_resume_match_stream(
         yield {"error": "Summary timed out. Try again."}
     except httpx.HTTPStatusError as e:
         log.warning("LLM API error: %s", e)
-        yield {"error": f"Self-hosted runtime error: {e.response.status_code}"}
+        yield {"error": _parse_self_hosted_error(e.response)}
     except Exception as e:
         log.warning("LLM stream failed: %s", e)
         yield {"error": f"AI summary failed: {e!s}"}

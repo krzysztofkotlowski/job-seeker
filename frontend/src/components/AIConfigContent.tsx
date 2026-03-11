@@ -34,6 +34,21 @@ const DEFAULT_EMBED_MODEL = "all-minilm";
 
 const EMBED_FAMILIES = ["nomic", "all-minilm", "mxbai", "bge"];
 
+interface SelfHostedHealthStatus {
+  llm_available?: boolean;
+  embedding_available?: boolean;
+  self_hosted?: {
+    runtime_name?: string;
+    runtime_ready?: boolean;
+    selected_chat_model?: string | null;
+    selected_embedding_model?: string | null;
+    active_chat_model?: string | null;
+    active_embedding_model?: string | null;
+    chat_error?: string | null;
+    embedding_error?: string | null;
+  };
+}
+
 // Chat completion models (March 2026) — frontier first, then legacy
 const OPENAI_LLM_MODELS = [
   "gpt-5.4",
@@ -136,6 +151,9 @@ export function AIConfigContent() {
   const [ensuringModel, setEnsuringModel] = useState(false);
   const [validating, setValidating] = useState(false);
   const [llmAvailable, setLlmAvailable] = useState<boolean | null>(null);
+  const [selfHostedHealth, setSelfHostedHealth] =
+    useState<SelfHostedHealthStatus | null>(null);
+  const [runtimePolling, setRuntimePolling] = useState(false);
 
   const [provider, setProvider] = useState<AIProvider>("ollama");
   const [openaiApiKey, setOpenaiApiKey] = useState("");
@@ -153,15 +171,27 @@ export function AIConfigContent() {
       .catch(() => setModels([]));
   };
 
+  const fetchSelfHostedHealth = () =>
+    fetch("/api/v1/health")
+      .then((r) => r.json())
+      .then((h: SelfHostedHealthStatus) => {
+        setSelfHostedHealth(h);
+        setLlmAvailable(h.llm_available ?? false);
+        return h;
+      })
+      .catch(() => {
+        setSelfHostedHealth(null);
+        setLlmAvailable(false);
+        return {
+          llm_available: false,
+          embedding_available: false,
+        } as SelfHostedHealthStatus;
+      });
+
   useEffect(() => {
     Promise.all([
       api.aiGetConfig(),
-      fetch("/api/v1/health")
-        .then((r) => r.json())
-        .then((h: { llm_available?: boolean }) =>
-          setLlmAvailable(h.llm_available ?? false),
-        )
-        .catch(() => setLlmAvailable(false)),
+      fetchSelfHostedHealth(),
     ])
       .then(([cfg]) => {
         const p = (cfg.provider as AIProvider) || "ollama";
@@ -245,14 +275,26 @@ export function AIConfigContent() {
       setEmbedModel(updated.embed_model || embedModel);
       setOpenaiApiKey("");
       toast.showSuccess("AI config saved");
-      if (provider === "ollama" || embedSource === "ollama") {
-        fetchModels();
-        fetch("/api/v1/health")
-          .then((r) => r.json())
-          .then((h: { llm_available?: boolean }) =>
-            setLlmAvailable(h.llm_available ?? false),
-          )
-          .catch(() => setLlmAvailable(false));
+      if (updated.provider === "ollama" || updated.embed_source === "ollama") {
+        setRuntimePolling(true);
+        try {
+          for (let attempt = 0; attempt < 10; attempt += 1) {
+            fetchModels();
+            const health = await fetchSelfHostedHealth();
+            const runtimeReady = Boolean(health.llm_available);
+            const embeddingReady =
+              updated.embed_source !== "ollama" ||
+              health.embedding_available !== false;
+            const chatError = health.self_hosted?.chat_error;
+            const embeddingError = health.self_hosted?.embedding_error;
+            if ((runtimeReady && embeddingReady) || chatError || embeddingError) {
+              break;
+            }
+            await new Promise((resolve) => window.setTimeout(resolve, 1000));
+          }
+        } finally {
+          setRuntimePolling(false);
+        }
       }
     } catch (e) {
       toast.showError(e instanceof Error ? e.message : "Failed to save");
@@ -308,6 +350,17 @@ export function AIConfigContent() {
   const embedConfigDirty =
     (config?.embed_model || "") !== (embedModel || "") ||
     (config?.embed_source || "ollama") !== embedSource;
+  const selfHostedRuntime = selfHostedHealth?.self_hosted;
+  const selfHostedChatSelected = provider === "ollama";
+  const selfHostedEmbeddingSelected = embedSource === "ollama";
+  const selfHostedUnavailable =
+    (selfHostedChatSelected && llmAvailable === false) ||
+    (selfHostedEmbeddingSelected &&
+      selfHostedHealth?.embedding_available === false);
+  const selfHostedErrors = [
+    selfHostedChatSelected ? selfHostedRuntime?.chat_error : null,
+    selfHostedEmbeddingSelected ? selfHostedRuntime?.embedding_error : null,
+  ].filter((value): value is string => Boolean(value));
 
   if (loading) {
     return <LoadingSpinner />;
@@ -330,13 +383,22 @@ export function AIConfigContent() {
         </ToggleButtonGroup>
       </Paper>
 
-      {provider === "ollama" && (
+      {(selfHostedChatSelected || selfHostedEmbeddingSelected) && (
         <>
-          {llmAvailable === false && (
-            <Alert severity="warning">
-              The self-hosted runtime is not available. Start thin-llama or
-              another compatible runtime, then ensure your selected chat and
-              embedding models are pulled.
+          {selfHostedUnavailable && (
+            <Alert severity={runtimePolling && selfHostedErrors.length === 0 ? "info" : "warning"}>
+              {runtimePolling && selfHostedErrors.length === 0
+                ? "The self-hosted runtime is starting the selected models."
+                : "The self-hosted runtime is not available. Start thin-llama or another compatible runtime, then ensure your selected self-hosted models are pulled."}
+              {selfHostedErrors.length > 0 && (
+                <Box sx={{ mt: 1, display: "flex", flexDirection: "column", gap: 0.5 }}>
+                  {selfHostedErrors.map((error) => (
+                    <Typography key={error} variant="body2">
+                      {error}
+                    </Typography>
+                  ))}
+                </Box>
+              )}
             </Alert>
           )}
 

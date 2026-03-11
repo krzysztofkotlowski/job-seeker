@@ -1,11 +1,15 @@
-"""Embedding service: generate vectors via Ollama or OpenAI for RAG."""
+"""Embedding service: generate vectors via a self-hosted runtime or OpenAI for RAG."""
 
 import logging
 import os
 
 import httpx
 
-from app.services.self_hosted_runtime_service import is_self_hosted_model_available
+from app.services.self_hosted_runtime_service import (
+    get_self_hosted_embedding_dims,
+    is_self_hosted_model_available,
+    is_self_hosted_model_ready,
+)
 
 log = logging.getLogger(__name__)
 
@@ -72,18 +76,26 @@ def embed_batch_openai(texts: list[str], model: str | None = None, api_key: str 
 
 
 def is_available() -> bool:
-    """Return True if embedding service is configured and reachable."""
-    return is_ollama_model_available(EMBED_MODEL)
+    """Return True if the configured self-hosted embedding model is ready."""
+    return is_ollama_model_ready(EMBED_MODEL)
 
 
 def is_ollama_model_available(model: str | None) -> bool:
-    """Return True if the requested self-hosted embedding model is available."""
+    """Return True if the requested self-hosted embedding model is installed."""
     return is_self_hosted_model_available((model or "").strip() or EMBED_MODEL)
 
 
+def is_ollama_model_ready(model: str | None) -> bool:
+    """Return True if the requested self-hosted embedding model is ready to serve."""
+    return is_self_hosted_model_ready((model or "").strip() or EMBED_MODEL)
+
+
 def get_ollama_embedding_dims(model: str | None) -> int | None:
-    """Return embedding dims for a specific Ollama model by running a tiny sample embed."""
+    """Resolve embedding dims from runtime metadata first, then fall back to a tiny probe."""
     requested = (model or "").strip() or EMBED_MODEL
+    dims = get_self_hosted_embedding_dims(requested)
+    if isinstance(dims, int) and dims > 0:
+        return dims
     vec = embed_text("dimension probe", model=requested, ai_config={"embed_source": "ollama"})
     if not vec:
         return None
@@ -124,9 +136,9 @@ def embed_text(
     except httpx.TimeoutException:
         log.warning("Embedding request timed out")
     except httpx.HTTPStatusError as e:
-        log.warning("Embedding API error: %s", e)
+        log.warning("Self-hosted embedding API error: %s", e)
     except Exception as e:
-        log.warning("Embedding failed: %s", e)
+        log.warning("Self-hosted embedding failed: %s", e)
     return None
 
 
@@ -163,7 +175,7 @@ def embed_batch(
     except httpx.TimeoutException:
         log.warning("Batch embedding timed out")
     except httpx.HTTPStatusError as e:
-        log.warning("Batch embedding API error: %s", e)
+        log.warning("Self-hosted batch embedding API error: %s", e)
     except Exception as e:
-        log.warning("Batch embedding failed: %s", e)
+        log.warning("Self-hosted batch embedding failed: %s", e)
     return []

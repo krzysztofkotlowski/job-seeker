@@ -1,6 +1,6 @@
 # Job Seeker Tracker — Backend
 
-FastAPI 2.x, SQLAlchemy 2, Celery. PostgreSQL, Elasticsearch, Ollama/OpenAI.
+FastAPI 2.x, SQLAlchemy 2, Celery. PostgreSQL, Elasticsearch, thin-llama/OpenAI.
 
 See [project root README](../README.md) for full documentation, setup, and deployment.
 

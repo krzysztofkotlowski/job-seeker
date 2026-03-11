@@ -227,7 +227,7 @@ def queue_sync_run(
     configured_dims = int(ai_cfg.get("embed_dims") or 0)
     if embed_source == "ollama" and configured_dims != embed_dims:
         log.info(
-            "Normalizing Ollama embed dims before queueing sync: model=%s stored=%s resolved=%s",
+            "Normalizing self-hosted embed dims before queueing sync: model=%s stored=%s resolved=%s",
             embed_model,
             configured_dims,
             embed_dims,

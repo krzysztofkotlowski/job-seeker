@@ -262,6 +262,7 @@ export interface SelfHostedModel {
   name: string;
   model?: string;
   role?: "chat" | "embedding";
+  embedding_dims?: number;
   supported?: boolean;
   available?: boolean;
   active?: boolean;

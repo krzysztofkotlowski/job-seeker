@@ -3,15 +3,17 @@
 import asyncio
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from app.services.llm_service import DEFAULT_LLM_MODEL, LLMConfig, summarize_resume_match
+import pytest
+
+from app.services.llm_service import DEFAULT_LLM_MODEL, LLMConfig, LLMRequestError, summarize_resume_match
 
 
-def test_summarize_resume_match_returns_none_when_disabled():
-    """When LLM is disabled (no URL), return (None, None)."""
+def test_summarize_resume_match_raises_when_disabled():
+    """When the self-hosted runtime is not configured, raise a user-facing error."""
     empty_cfg = LLMConfig(url="", model=DEFAULT_LLM_MODEL, timeout=30, summarize_timeout=90, max_output_tokens=512)
     with patch("app.services.llm_service.get_llm_config", return_value=empty_cfg):
-        summary, _ = asyncio.run(summarize_resume_match(["Python"], [], []))
-    assert summary is None
+        with pytest.raises(LLMRequestError, match="runtime URL not configured"):
+            asyncio.run(summarize_resume_match(["Python"], [], []))
 
 
 def test_summarize_resume_match_returns_none_when_empty_input():
@@ -37,6 +39,7 @@ def test_summarize_resume_match_returns_summary_when_llm_responds():
     cfg = LLMConfig(url="http://ollama:11434", model=DEFAULT_LLM_MODEL, timeout=30, summarize_timeout=90, max_output_tokens=512)
     with (
         patch("app.services.llm_service.get_llm_config", return_value=cfg),
+        patch("app.services.llm_service.is_self_hosted_model_ready", return_value=True),
         patch("app.services.llm_service.httpx.AsyncClient", return_value=mock_client),
     ):
         summary, eval_count = asyncio.run(

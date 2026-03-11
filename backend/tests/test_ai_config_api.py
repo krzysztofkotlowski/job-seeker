@@ -152,6 +152,37 @@ def test_ai_put_config_best_effort_activates_self_hosted_models(client: TestClie
     )
 
 
+def test_ai_put_config_skips_activation_when_models_unchanged_and_ready(client: TestClient):
+    """Saving the same ready self-hosted config should not reactivate models."""
+    with patch("app.services.ai_config_service._best_effort_activate_self_hosted_models") as activate, patch(
+        "app.services.ai_config_service.is_self_hosted_model_ready",
+        return_value=True,
+    ):
+        first = client.put(
+            "/api/v1/ai/config",
+            json={
+                "provider": "ollama",
+                "embed_source": "ollama",
+                "llm_model": "qwen2.5:3b",
+                "embed_model": "all-minilm",
+            },
+        )
+        assert first.status_code == 200
+        activate.reset_mock()
+
+        second = client.put(
+            "/api/v1/ai/config",
+            json={
+                "provider": "ollama",
+                "embed_source": "ollama",
+                "llm_model": "qwen2.5:3b",
+                "embed_model": "all-minilm",
+            },
+        )
+    assert second.status_code == 200
+    activate.assert_not_called()
+
+
 def test_ai_metrics_returns_structure(client: TestClient):
     """GET /ai/metrics returns metrics structure."""
     r = client.get("/api/v1/ai/metrics")
