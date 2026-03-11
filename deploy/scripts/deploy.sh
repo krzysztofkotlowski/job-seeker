@@ -22,7 +22,7 @@ readonly PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 readonly DEFAULT_SERVER="${DEPLOY_SERVER:-kkotlowski@hp-homeserver}"
 readonly DEFAULT_PATH="${DEPLOY_PATH:-/opt/jobseeker}"
 readonly DEFAULT_THIN_LLAMA_GIT_URL="https://github.com/krzysztofkotlowski/thin-llama.git"
-readonly DEFAULT_THIN_LLAMA_GIT_REF="b79c1847988fcf575b2866e1193042656ccc8681"
+readonly DEFAULT_THIN_LLAMA_GIT_REF="bd513e733ac292b18dfd0c26263f513759046dea"
 
 SERVER="${1:-${DEFAULT_SERVER}}"
 REMOTE_PATH="${DEPLOY_PATH:-${DEFAULT_PATH}}"
@@ -87,7 +87,7 @@ ssh "${SERVER}" "set -euo pipefail; mkdir -p '$(dirname "${REMOTE_THIN_LLAMA_PAT
 
 # --- Deploy on remote ---
 log "Starting services on remote..."
-ssh "${SERVER}" "cd ${REMOTE_PATH} && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f deploy/docker-compose.prod.yml up -d --build"
+ssh "${SERVER}" "cd ${REMOTE_PATH} && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f deploy/docker-compose.prod.yml up -d --build --remove-orphans"
 
 # --- Ensure thin-llama models (belt-and-suspenders: thin-llama-init in the stack may have run already) ---
 log "Ensuring thin-llama models (embedding + LLM)..."

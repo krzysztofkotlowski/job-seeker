@@ -22,7 +22,7 @@ readonly DEFAULT_SERVER="${DEPLOY_SERVER:-kkotlowski@hp-homeserver}"
 readonly DEFAULT_PATH="${DEPLOY_PATH:-/opt/jobseeker}"
 readonly COMPOSE_FILE="deploy/docker-compose.prod.yml"
 readonly DEFAULT_THIN_LLAMA_GIT_URL="https://github.com/krzysztofkotlowski/thin-llama.git"
-readonly DEFAULT_THIN_LLAMA_GIT_REF="b79c1847988fcf575b2866e1193042656ccc8681"
+readonly DEFAULT_THIN_LLAMA_GIT_REF="bd513e733ac292b18dfd0c26263f513759046dea"
 
 SERVER="${1:-${DEFAULT_SERVER}}"
 REMOTE_PATH="${DEPLOY_PATH:-${DEFAULT_PATH}}"
@@ -155,7 +155,7 @@ deploy_app_only() {
   ensure_remote_service_running_without_recreate redis
 
   log "Deploying thin-llama runtime..."
-  ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f '${COMPOSE_FILE}' up -d --build thin-llama"
+  ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f '${COMPOSE_FILE}' up -d --build --remove-orphans thin-llama"
 }
 
 bootstrap_remote_self_hosted() {
@@ -163,7 +163,7 @@ bootstrap_remote_self_hosted() {
   ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f '${COMPOSE_FILE}' run --rm thin-llama-init"
 
   log "Deploying app services only (backend/frontend/worker, no DB/search rebuild)..."
-  ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f '${COMPOSE_FILE}' up -d --build --no-deps backend frontend worker"
+  ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f '${COMPOSE_FILE}' up -d --build --no-deps --remove-orphans backend frontend worker"
 }
 
 check_remote_backend_health_once() {

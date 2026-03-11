@@ -28,7 +28,7 @@ The deploy scripts now fetch `thin-llama` directly on the server from Git. Set t
 
 ```bash
 THIN_LLAMA_GIT_URL=https://github.com/krzysztofkotlowski/thin-llama.git
-THIN_LLAMA_GIT_REF=b79c1847988fcf575b2866e1193042656ccc8681
+THIN_LLAMA_GIT_REF=bd513e733ac292b18dfd0c26263f513759046dea
 ```
 
 Use a tag or commit SHA for `THIN_LLAMA_GIT_REF`. The deploy scripts clone the repo if missing, fetch tags, and check out that pinned ref in detached HEAD mode before building the runtime image.
@@ -76,7 +76,7 @@ Open `http://<server-ip>` in your browser. The frontend serves on port 80 and pr
 | `LLM_MAX_OUTPUT_TOKENS` | Max tokens for AI output | `400` |
 | `RAG_ENABLED` | Enable semantic search | `true` |
 | `THIN_LLAMA_GIT_URL` | Git source for the self-hosted runtime | `https://github.com/krzysztofkotlowski/thin-llama.git` |
-| `THIN_LLAMA_GIT_REF` | Pinned tag or commit to deploy | `b79c1847988fcf575b2866e1193042656ccc8681` |
+| `THIN_LLAMA_GIT_REF` | Pinned tag or commit to deploy | `bd513e733ac292b18dfd0c26263f513759046dea` |
 | `KEYCLOAK_ENABLED` | Enable Keycloak auth | `false` |
 | `CORS_ORIGINS` | Allowed origins (`*` for same-origin) | `*` |
 
