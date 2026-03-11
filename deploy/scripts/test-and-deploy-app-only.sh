@@ -21,10 +21,15 @@ readonly PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 readonly DEFAULT_SERVER="${DEPLOY_SERVER:-kkotlowski@hp-homeserver}"
 readonly DEFAULT_PATH="${DEPLOY_PATH:-/opt/jobseeker}"
 readonly COMPOSE_FILE="deploy/docker-compose.prod.yml"
+readonly DEFAULT_THIN_LLAMA_GIT_URL="https://github.com/krzysztofkotlowski/thin-llama.git"
+readonly DEFAULT_THIN_LLAMA_GIT_REF="b79c1847988fcf575b2866e1193042656ccc8681"
 
 SERVER="${1:-${DEFAULT_SERVER}}"
 REMOTE_PATH="${DEPLOY_PATH:-${DEFAULT_PATH}}"
 RUN_TESTS="${RUN_TESTS:-1}"
+readonly REMOTE_THIN_LLAMA_PATH="${REMOTE_THIN_LLAMA_PATH:-$(dirname "${REMOTE_PATH}")/thin-llama}"
+THIN_LLAMA_GIT_URL="${THIN_LLAMA_GIT_URL:-}"
+THIN_LLAMA_GIT_REF="${THIN_LLAMA_GIT_REF:-}"
 
 log() { echo "[test-deploy-app-only]" "$@"; }
 err() { echo "[test-deploy-app-only] ERROR:" "$@" >&2; }
@@ -85,7 +90,7 @@ run_local_tests() {
 }
 
 sync_project() {
-  log "Syncing files to ${SERVER}:${REMOTE_PATH}..."
+  log "Syncing job-seeker to ${SERVER}:${REMOTE_PATH}..."
   rsync -avz --delete \
     --exclude '.git' \
     --exclude 'node_modules' \
@@ -108,15 +113,38 @@ ensure_remote_env() {
   fi
 }
 
+load_thin_llama_git_config() {
+  local remote_values=""
+  remote_values="$(ssh "${SERVER}" "if test -f '${REMOTE_PATH}/.env'; then set -a; . '${REMOTE_PATH}/.env'; printf '%s\n%s\n' \"\${THIN_LLAMA_GIT_URL:-}\" \"\${THIN_LLAMA_GIT_REF:-}\"; else printf '\n\n'; fi")"
+  local remote_url=""
+  local remote_ref=""
+  remote_url="$(printf '%s' "${remote_values}" | sed -n '1p')"
+  remote_ref="$(printf '%s' "${remote_values}" | sed -n '2p')"
+
+  THIN_LLAMA_GIT_URL="${THIN_LLAMA_GIT_URL:-${remote_url}}"
+  THIN_LLAMA_GIT_REF="${THIN_LLAMA_GIT_REF:-${remote_ref}}"
+  if [[ -z "${THIN_LLAMA_GIT_URL}" ]]; then
+    THIN_LLAMA_GIT_URL="${DEFAULT_THIN_LLAMA_GIT_URL}"
+  fi
+  if [[ -z "${THIN_LLAMA_GIT_REF}" ]]; then
+    THIN_LLAMA_GIT_REF="${DEFAULT_THIN_LLAMA_GIT_REF}"
+  fi
+}
+
+ensure_remote_thin_llama_checkout() {
+  log "Fetching thin-llama from Git (${THIN_LLAMA_GIT_URL} @ ${THIN_LLAMA_GIT_REF})..."
+  ssh "${SERVER}" "set -euo pipefail; mkdir -p '$(dirname "${REMOTE_THIN_LLAMA_PATH}")'; if [ ! -d '${REMOTE_THIN_LLAMA_PATH}/.git' ]; then git clone '${THIN_LLAMA_GIT_URL}' '${REMOTE_THIN_LLAMA_PATH}'; fi; cd '${REMOTE_THIN_LLAMA_PATH}'; git fetch --tags origin; git checkout --detach '${THIN_LLAMA_GIT_REF}'; git submodule update --init --recursive >/dev/null 2>&1 || true; git rev-parse --short HEAD"
+}
+
 ensure_remote_service_running_without_recreate() {
   local service="$1"
   local exists=""
-  exists="$(ssh "${SERVER}" "cd '${REMOTE_PATH}' && docker compose -f '${COMPOSE_FILE}' ps -a -q '${service}'" || true)"
+  exists="$(ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f '${COMPOSE_FILE}' ps -a -q '${service}'" || true)"
   if [[ -z "${exists}" ]]; then
     log "Remote ${service} container missing -> creating it once."
-    ssh "${SERVER}" "cd '${REMOTE_PATH}' && docker compose -f '${COMPOSE_FILE}' up -d '${service}'"
+    ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f '${COMPOSE_FILE}' up -d '${service}'"
   else
-    ssh "${SERVER}" "cd '${REMOTE_PATH}' && docker compose -f '${COMPOSE_FILE}' start '${service}' >/dev/null 2>&1 || true"
+    ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f '${COMPOSE_FILE}' start '${service}' >/dev/null 2>&1 || true"
   fi
 }
 
@@ -125,46 +153,17 @@ deploy_app_only() {
   ensure_remote_service_running_without_recreate postgres
   ensure_remote_service_running_without_recreate elasticsearch
   ensure_remote_service_running_without_recreate redis
-  ensure_remote_service_running_without_recreate ollama
 
-  log "Deploying app services only (backend/frontend/worker, no DB/search rebuild)..."
-  ssh "${SERVER}" "cd '${REMOTE_PATH}' && docker compose -f '${COMPOSE_FILE}' up -d --build --no-deps backend frontend worker"
+  log "Deploying thin-llama runtime..."
+  ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f '${COMPOSE_FILE}' up -d --build thin-llama"
 }
 
-ensure_remote_models() {
-  log "Ensuring Ollama models..."
+bootstrap_remote_self_hosted() {
+  log "Bootstrapping thin-llama models..."
+  ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f '${COMPOSE_FILE}' run --rm thin-llama-init"
 
-  remote_has_model() {
-    local requested="$1"
-    local base="${requested%%:*}"
-    ssh "${SERVER}" "cd '${REMOTE_PATH}' && docker compose -f '${COMPOSE_FILE}' exec -T ollama ollama list" 2>/dev/null \
-      | awk 'NR>1 {print $1}' \
-      | grep -E "^${requested}(:|$)|^${base}:" >/dev/null 2>&1
-  }
-
-  for model in all-minilm qwen2.5:7b; do
-    if remote_has_model "${model}"; then
-      log "Model already present: ${model}"
-      continue
-    fi
-
-    log "Model missing, pulling: ${model}"
-    local ok=0
-    for i in $(seq 1 20); do
-      if ssh "${SERVER}" "cd '${REMOTE_PATH}' && docker compose -f '${COMPOSE_FILE}' exec -T ollama ollama pull '${model}'" >/dev/null 2>&1; then
-        ok=1
-        break
-      fi
-      sleep 3
-      if [[ "${i}" -eq 1 ]]; then
-        log "Waiting for ollama to be ready for model pull (${model})..."
-      fi
-    done
-    if [[ "${ok}" -ne 1 ]]; then
-      err "Could not pull model ${model} on remote."
-      exit 1
-    fi
-  done
+  log "Deploying app services only (backend/frontend/worker, no DB/search rebuild)..."
+  ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f '${COMPOSE_FILE}' up -d --build --no-deps backend frontend worker"
 }
 
 check_remote_backend_health_once() {
@@ -174,7 +173,7 @@ check_remote_backend_health_once() {
   fi
   # Fallback: inside backend container.
   ssh "${SERVER}" \
-    "cd '${REMOTE_PATH}' && docker compose -f '${COMPOSE_FILE}' exec -T backend python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5)\"" \
+    "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f '${COMPOSE_FILE}' exec -T backend python -c \"import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/v1/health', timeout=5)\"" \
     >/dev/null 2>&1
 }
 
@@ -193,9 +192,9 @@ verify_remote_health() {
 
   err "Remote backend health check failed after retries."
   log "Diagnostics: docker compose ps"
-  ssh "${SERVER}" "cd '${REMOTE_PATH}' && docker compose -f '${COMPOSE_FILE}' ps" || true
+  ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f '${COMPOSE_FILE}' ps" || true
   log "Diagnostics: backend logs (last 120 lines)"
-  ssh "${SERVER}" "cd '${REMOTE_PATH}' && docker compose -f '${COMPOSE_FILE}' logs --tail=120 backend" || true
+  ssh "${SERVER}" "cd '${REMOTE_PATH}' && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f '${COMPOSE_FILE}' logs --tail=120 backend" || true
   exit 1
 }
 
@@ -217,8 +216,10 @@ main() {
   run_local_tests
   sync_project
   ensure_remote_env
+  load_thin_llama_git_config
+  ensure_remote_thin_llama_checkout
   deploy_app_only
-  ensure_remote_models
+  bootstrap_remote_self_hosted
   verify_remote_health
   verify_frontend_health
   log "Done. App deploy completed without unnecessary DB/search redeployment."

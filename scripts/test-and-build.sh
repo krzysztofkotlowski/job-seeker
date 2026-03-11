@@ -66,48 +66,32 @@ echo "=== 3. Docker build and up ==="
 docker compose --compatibility up --build -d
 
 echo ""
-echo "=== 4. Ollama: ensure running and models pulled ==="
-echo "Starting Ollama if not already running..."
-docker compose --compatibility up -d ollama 2>/dev/null || true
-echo "Waiting for Ollama API (up to 120s)..."
-OLLAMA_READY=0
+echo "=== 4. thin-llama: ensure runtime and models are ready ==="
+echo "Starting thin-llama if not already running..."
+docker compose --compatibility up -d thin-llama 2>/dev/null || true
+echo "Waiting for thin-llama API (up to 120s)..."
+THIN_LLAMA_READY=0
 for i in $(seq 1 60); do
-  if curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then
-    OLLAMA_READY=1
-    echo "Ollama is ready."
+  if curl -sf http://localhost:18080/health >/dev/null 2>&1; then
+    THIN_LLAMA_READY=1
+    echo "thin-llama is ready."
     break
   fi
   printf "."
   sleep 2
 done
 echo ""
-if [ "$OLLAMA_READY" -eq 0 ]; then
-  echo "WARNING: Ollama not reachable after 120s. Resume summaries will be disabled."
-  echo "  Start manually: docker compose up -d ollama"
-  echo "  Then pull model: docker compose exec ollama ollama pull qwen2.5:7b"
+if [ "$THIN_LLAMA_READY" -eq 0 ]; then
+  echo "WARNING: thin-llama not reachable after 120s. Resume summaries will be disabled."
+  echo "  Start manually: docker compose up -d thin-llama"
+  echo "  Then bootstrap models: docker compose run --rm thin-llama-init"
 else
-  echo "Removing unused models (keeping qwen2.5 and all-minilm)..."
-  for full in $(docker compose exec -T ollama ollama list 2>/dev/null | awk 'NR>1 {print $1}'); do
-    base="${full%%:*}"
-    case "$base" in
-      qwen2.5|all-minilm) ;;
-      *)
-        echo "  Removing $full"
-        docker compose exec -T ollama ollama rm "$full" 2>/dev/null || true
-        ;;
-    esac
-  done
-  echo "Pulling qwen2.5:7b (for resume AI summary)..."
-  if ! docker compose exec -T ollama ollama pull qwen2.5:7b; then
-    echo "ERROR: Failed to pull qwen2.5:7b. Resume summaries will not work."
+  echo "Bootstrapping qwen2.5:3b and all-minilm..."
+  if ! docker compose run --rm thin-llama-init; then
+    echo "ERROR: Failed to bootstrap thin-llama models. AI summaries and RAG will not work."
     exit 1
   fi
-  echo "Pulling all-minilm (for RAG)..."
-  if ! docker compose exec -T ollama ollama pull all-minilm; then
-    echo "ERROR: Failed to pull all-minilm. RAG semantic search will not work."
-    exit 1
-  fi
-  echo "Ollama models ready."
+  echo "thin-llama models ready."
 fi
 
 echo ""
@@ -117,10 +101,10 @@ if curl -sf http://localhost:9200/_cluster/health >/dev/null 2>&1; then
 else
   echo "Elasticsearch: not reachable"
 fi
-if curl -sf http://localhost:11434/api/tags >/dev/null 2>&1; then
-  echo "Ollama: OK"
+if curl -sf http://localhost:18080/health >/dev/null 2>&1; then
+  echo "thin-llama: OK"
 else
-  echo "Ollama: not reachable"
+  echo "thin-llama: not reachable"
 fi
 if curl -sf http://localhost:8000/api/v1/health >/dev/null 2>&1; then
   echo "Backend: OK"

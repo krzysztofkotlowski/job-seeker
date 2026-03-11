@@ -70,7 +70,7 @@ def ensure_model(
     body: EnsureModelRequest,
     user: Annotated[dict | None, Depends(require_auth)] = None,
 ):
-    """Ensure Ollama model is available; pull if missing. Returns { status, error? }."""
+    """Ensure a self-hosted model is available; pull if missing. Returns { status, error? }."""
     result = ensure_ollama_model(body.model)
     return result
 

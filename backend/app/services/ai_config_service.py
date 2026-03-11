@@ -1,4 +1,4 @@
-"""AI config service: load/save config from DB, list Ollama/OpenAI models."""
+"""AI config service: load/save config from DB, list self-hosted/OpenAI models."""
 
 import logging
 import os
@@ -8,11 +8,15 @@ from sqlalchemy.orm import Session
 
 from app.models.tables import AIConfigRow
 from app.services.embedding_service import get_ollama_embedding_dims
+from app.services.self_hosted_runtime_service import (
+    best_effort_activate_self_hosted_models as runtime_best_effort_activate_self_hosted_models,
+    ensure_self_hosted_model,
+    list_self_hosted_models,
+)
 
 log = logging.getLogger(__name__)
 
-OLLAMA_URL = (os.environ.get("LLM_URL", "") or "").rstrip("/")
-DEFAULT_LLM_MODEL = os.environ.get("LLM_MODEL", "phi3:mini") or "phi3:mini"
+DEFAULT_LLM_MODEL = os.environ.get("LLM_MODEL", "qwen2.5:3b") or "qwen2.5:3b"
 DEFAULT_EMBED_MODEL = os.environ.get("EMBED_MODEL", "all-minilm") or "all-minilm"
 DEFAULT_MAX_TOKENS = int(os.environ.get("LLM_MAX_OUTPUT_TOKENS", "2048") or "2048")
 OPENAI_EMBED_DIMS = 1536
@@ -26,6 +30,14 @@ OPENAI_LLM_MODELS = [
     "gpt-3.5-turbo",
 ]
 OPENAI_EMBED_MODEL = "text-embedding-3-small"
+
+
+def _best_effort_activate_self_hosted_models(chat_model: str | None = None, embed_model: str | None = None) -> None:
+    """Best-effort activate downloaded self-hosted models when supported."""
+    runtime_best_effort_activate_self_hosted_models(
+        chat_model=chat_model,
+        embed_model=embed_model,
+    )
 
 
 def _clamp_embed_dims(embed_dims: int) -> int:
@@ -167,6 +179,11 @@ def update_ai_config(
 
     db.commit()
     db.refresh(row)
+    if row.provider == "ollama" or row.embed_source == "ollama":
+        _best_effort_activate_self_hosted_models(
+            chat_model=row.llm_model if row.provider == "ollama" else None,
+            embed_model=row.embed_model if row.embed_source == "ollama" else None,
+        )
     return get_ai_config(db)
 
 
@@ -188,47 +205,13 @@ def validate_openai_key(api_key: str) -> bool:
 
 
 def ensure_ollama_model(model: str) -> dict:
-    """Ensure Ollama model is available; pull if missing. Returns { status: 'ok' } or { status: 'error', error: '...' }."""
-    if not model or not str(model).strip():
-        return {"status": "error", "error": "Model name is required"}
-    name = str(model).strip()
-    if not OLLAMA_URL:
-        return {"status": "error", "error": "Ollama URL not configured"}
-    try:
-        with httpx.Client(timeout=300) as client:
-            resp = client.post(
-                f"{OLLAMA_URL}/api/pull",
-                json={"model": name, "stream": False},
-            )
-            if resp.status_code != 200:
-                return {"status": "error", "error": resp.text or f"HTTP {resp.status_code}"}
-            data = resp.json()
-            status = data.get("status", "")
-            if status == "success":
-                return {"status": "ok"}
-            return {"status": "error", "error": status or "Pull failed"}
-    except httpx.TimeoutException:
-        return {"status": "error", "error": "Ollama request timed out"}
-    except Exception as e:
-        log.debug("Ollama ensure-model failed: %s", e)
-        return {"status": "error", "error": str(e)}
+    """Ensure a self-hosted model is available; pull if missing."""
+    return ensure_self_hosted_model(model)
 
 
 def list_ollama_models() -> dict:
-    """Fetch available models from Ollama /api/tags. Returns { models: [...] }."""
-    if not OLLAMA_URL:
-        return {"models": []}
-    try:
-        with httpx.Client(timeout=10) as client:
-            resp = client.get(f"{OLLAMA_URL}/api/tags")
-            if resp.status_code != 200:
-                return {"models": []}
-            data = resp.json()
-            models = data.get("models") or []
-            return {"models": models}
-    except Exception as e:
-        log.debug("Failed to list Ollama models: %s", e)
-        return {"models": []}
+    """Fetch self-hosted models, preferring thin-llama catalog and falling back to installed tags."""
+    return list_self_hosted_models()
 
 
 def list_openai_models() -> dict:

@@ -9,13 +9,14 @@ import { ToastProvider } from "../contexts/ToastContext";
 vi.mock("../api/client", () => ({
   api: {
     aiListModels: vi.fn().mockResolvedValue({ models: [] }),
+    aiEnsureModel: vi.fn().mockResolvedValue({ status: "ok" }),
     aiGetConfig: vi.fn().mockResolvedValue({
       provider: "ollama",
       openai_llm_model: "gpt-4o-mini",
       embed_source: "ollama",
       api_key_set: false,
-      llm_model: "",
-      embed_model: "",
+      llm_model: "qwen2.5:3b",
+      embed_model: "all-minilm",
       embed_dims: 384,
       temperature: 0.3,
       max_output_tokens: 1024,
@@ -56,7 +57,7 @@ describe("AIConfigContent", () => {
     vi.clearAllMocks();
   });
 
-  it("saves OpenAI config without empty llm_model or embed_model in payload", async () => {
+  it("saves OpenAI config without sending an empty llm_model", async () => {
     const user = userEvent.setup();
     renderWithProviders();
 
@@ -84,7 +85,7 @@ describe("AIConfigContent", () => {
     expect(payload.openai_llm_model).toBe("gpt-4o-mini");
     expect(payload.embed_source).toBe("ollama");
     expect(payload).not.toHaveProperty("llm_model");
-    expect(payload).not.toHaveProperty("embed_model");
+    expect(payload.embed_model).toBe("all-minilm");
   });
 
   it("shows resolved embedding dims from the saved config", async () => {
@@ -93,5 +94,36 @@ describe("AIConfigContent", () => {
     expect(
       await screen.findByText(/Resolved embedding dims:\s*384/i),
     ).toBeInTheDocument();
+  });
+
+  it("ensures both selected self-hosted models before saving", async () => {
+    const user = userEvent.setup();
+    (api.aiUpdateConfig as ReturnType<typeof vi.fn>).mockResolvedValueOnce({
+      provider: "ollama",
+      openai_llm_model: "gpt-4o-mini",
+      embed_source: "ollama",
+      api_key_set: false,
+      llm_model: "qwen2.5:3b",
+      embed_model: "all-minilm",
+      embed_dims: 384,
+      temperature: 0.3,
+      max_output_tokens: 1024,
+    });
+
+    renderWithProviders();
+
+    await waitFor(() => {
+      expect(api.aiGetConfig).toHaveBeenCalled();
+    });
+
+    await user.click(screen.getByRole("button", { name: /^Save$/ }));
+
+    await waitFor(() => {
+      expect(api.aiEnsureModel).toHaveBeenCalledTimes(2);
+      expect(api.aiUpdateConfig).toHaveBeenCalled();
+    });
+
+    expect(api.aiEnsureModel).toHaveBeenNthCalledWith(1, "qwen2.5:3b");
+    expect(api.aiEnsureModel).toHaveBeenNthCalledWith(2, "all-minilm");
   });
 });

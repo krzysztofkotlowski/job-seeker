@@ -1,6 +1,6 @@
 # Job Seeker Tracker — Production Deployment
 
-Deploy the Job Seeker Tracker stack to an Ubuntu Server using Docker Compose.
+Deploy the Job Seeker Tracker stack to an Ubuntu Server using Docker Compose, with `thin-llama` as the only self-hosted inference runtime.
 
 ## Prerequisites
 
@@ -22,7 +22,18 @@ ssh kkotlowski@hp-homeserver 'sudo bash /tmp/prepare-ubuntu-server.sh'
 
 This installs Docker, Docker Compose, Git, and configures UFW (SSH, HTTP, HTTPS).
 
-### 2. Deploy the application
+### 2. Pin the `thin-llama` Git source
+
+The deploy scripts now fetch `thin-llama` directly on the server from Git. Set these in `.env` before the first deploy:
+
+```bash
+THIN_LLAMA_GIT_URL=https://github.com/krzysztofkotlowski/thin-llama.git
+THIN_LLAMA_GIT_REF=b79c1847988fcf575b2866e1193042656ccc8681
+```
+
+Use a tag or commit SHA for `THIN_LLAMA_GIT_REF`. The deploy scripts clone the repo if missing, fetch tags, and check out that pinned ref in detached HEAD mode before building the runtime image.
+
+### 3. Deploy the application
 
 ```bash
 # From project root — test locally, then deploy
@@ -49,9 +60,9 @@ Or deploy without running tests:
 ./deploy/scripts/deploy.sh kkotlowski@hp-homeserver
 ```
 
-The script syncs the project via rsync and starts the stack. On first run, it creates `.env` from `deploy/env.example.prod` if missing. **Edit `.env` on the server** to set a strong `POSTGRES_PASSWORD` before the first deploy, or immediately after.
+The script syncs the `job-seeker` repo via rsync, fetches `thin-llama` from the pinned Git ref on the server, and starts the stack. On first run, it creates `.env` from `deploy/env.example.prod` if missing. **Edit `.env` on the server** to set a strong `POSTGRES_PASSWORD` before the first deploy, or immediately after.
 
-### 3. Access the app
+### 4. Access the app
 
 Open `http://<server-ip>` in your browser. The frontend serves on port 80 and proxies `/api` to the backend.
 
@@ -60,10 +71,12 @@ Open `http://<server-ip>` in your browser. The frontend serves on port 80 and pr
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `POSTGRES_PASSWORD` | PostgreSQL password | `jobseeker` |
-| `LLM_MODEL` | Ollama model for resume summaries | `qwen2.5:7b` |
-| `EMBED_MODEL` | Ollama embedding model for RAG | `all-minilm` |
+| `LLM_MODEL` | Self-hosted chat model for resume summaries | `qwen2.5:3b` |
+| `EMBED_MODEL` | Self-hosted embedding model for RAG | `all-minilm` |
 | `LLM_MAX_OUTPUT_TOKENS` | Max tokens for AI output | `400` |
 | `RAG_ENABLED` | Enable semantic search | `true` |
+| `THIN_LLAMA_GIT_URL` | Git source for the self-hosted runtime | `https://github.com/krzysztofkotlowski/thin-llama.git` |
+| `THIN_LLAMA_GIT_REF` | Pinned tag or commit to deploy | `b79c1847988fcf575b2866e1193042656ccc8681` |
 | `KEYCLOAK_ENABLED` | Enable Keycloak auth | `false` |
 | `CORS_ORIGINS` | Allowed origins (`*` for same-origin) | `*` |
 
@@ -94,20 +107,19 @@ docker compose up postgres -d
 
 The script dumps the local DB, copies it to the server, restores it, and cleans up.
 
-## Ollama models
+## thin-llama bootstrap
 
-The `ollama-init` service automatically pulls the embedding model (`all-minilm`) and LLM model (`qwen2.5:7b`) before the backend starts. The deploy script also runs a post-deploy step to ensure models are pulled. **First deploy may take several minutes** while models download.
+The stack no longer runs an Ollama container. Instead, `thin-llama` is the only self-hosted inference runtime.
 
-To use different models, set `LLM_MODEL` and `EMBED_MODEL` in `.env` before deploying.
+The `thin-llama-init` one-shot service automatically:
 
-**If embedding still fails (404 on /api/embed):** Manually pull the models on the server:
+1. waits for `thin-llama`
+2. pulls the configured embedding and chat models
+3. activates both models through `thin-llama`'s management API
 
-```bash
-ssh kkotlowski@hp-homeserver
-cd /opt/jobseeker
-docker compose -f deploy/docker-compose.prod.yml exec ollama ollama pull all-minilm
-docker compose -f deploy/docker-compose.prod.yml exec ollama ollama pull qwen2.5:7b
-```
+The deploy scripts also run a post-deploy `thin-llama-init` step as a belt-and-suspenders bootstrap. **First deploy may take several minutes** while the GGUF models download.
+
+To use different self-hosted models, set `LLM_MODEL` and `EMBED_MODEL` in `.env` before deploying. Those model names must exist in the `thin-llama` catalog available on the server.
 
 ## Manual operations
 
@@ -127,6 +139,9 @@ docker compose -f deploy/docker-compose.prod.yml logs -f
 
 # Rebuild after code changes
 docker compose -f deploy/docker-compose.prod.yml up -d --build
+
+# Re-run self-hosted model bootstrap
+docker compose -f deploy/docker-compose.prod.yml run --rm thin-llama-init
 ```
 
 ## Hardware notes
@@ -134,7 +149,7 @@ docker compose -f deploy/docker-compose.prod.yml up -d --build
 The stack is tuned for a machine with ~16GB RAM and 6 CPUs (e.g. HP EliteDesk G4):
 
 - Elasticsearch: 512MB heap
-- Ollama: 6 CPUs, 10GB limit (uses all cores for faster inference)
+- `thin-llama`: small-model CPU inference for one chat model and one embedding model
 - PostgreSQL, backend, frontend: default
 
 Adjust `deploy/docker-compose.prod.yml` if your hardware differs. CPU limit must not exceed host CPUs (e.g. 6 on a 6-core machine).

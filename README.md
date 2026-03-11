@@ -2,7 +2,7 @@
 
 AI job-intelligence platform for sourcing jobs, indexing them for semantic retrieval, analyzing resumes, and generating actionable career guidance.
 
-This project combines a React frontend, FastAPI backend, PostgreSQL, Elasticsearch, Redis, Celery, and Ollama/OpenAI into one end-to-end system. It ingests real job data from Polish IT job boards, normalizes and deduplicates listings, builds a managed vector index for recommendations, and lets a user move from raw job aggregation to AI-assisted resume analysis inside one product.
+This project combines a React frontend, FastAPI backend, PostgreSQL, Elasticsearch, Redis, Celery, and a self-hosted/OpenAI model layer into one end-to-end system. It ingests real job data from Polish IT job boards, normalizes and deduplicates listings, builds a managed vector index for recommendations, and lets a user move from raw job aggregation to AI-assisted resume analysis inside one product.
 
 From a portfolio perspective, this is not a UI-only app or an isolated AI demo. It shows full ownership of product delivery across ingestion, async pipelines, search infrastructure, AI integration, production deployment, and frontend UX.
 
@@ -21,7 +21,7 @@ From a portfolio perspective, this is not a UI-only app or an isolated AI demo. 
 - Filter, group duplicates, inspect details, and track application state
 - Upload a PDF resume and extract skills matched against imported jobs
 - Generate hybrid recommendations from the active semantic index
-- Produce AI summaries and career guidance with Ollama or OpenAI
+- Produce AI summaries and career guidance with `thin-llama` or OpenAI
 - Configure LLM and embedding providers from the UI
 - Run persistent embedding sync with tracked progress and active-index cutover
 - Explore skills, salary trends, and dashboard analytics
@@ -37,7 +37,7 @@ flowchart TB
     Redis["Redis"]
     Postgres["PostgreSQL"]
     ES["Elasticsearch"]
-    AI["Ollama / OpenAI"]
+    AI["thin-llama / OpenAI"]
     Sources["JustJoin.it / NoFluffJobs"]
 
     Browser -->|"HTTP /api"| API
@@ -58,7 +58,7 @@ flowchart TB
 - `PostgreSQL` stores the canonical job and application data.
 - `Elasticsearch` stores the active dense-vector recommendation index and powers semantic retrieval.
 - `Redis + Celery` run background import and embedding-sync work outside the request path.
-- `Ollama` provides local LLM and embedding inference by default; `OpenAI` can be used from the same UI configuration layer.
+- `thin-llama` provides the default self-hosted `llama.cpp` runtime, while `OpenAI` can be used from the same UI configuration layer.
 - The frontend is a single-page React app focused on job exploration, resume analysis, import operations, and AI settings.
 
 ### Recommendation / RAG flow
@@ -92,7 +92,7 @@ The recommendation pipeline uses the currently activated embedding run rather th
 | Backend  | FastAPI, SQLAlchemy 2, Pydantic 2, PyPDF, SlowAPI             |
 | Data     | PostgreSQL 16, Elasticsearch 8                                |
 | Async    | Celery 5, Redis 7                                             |
-| AI       | Ollama, OpenAI, local embeddings via `all-minilm` by default  |
+| AI       | thin-llama, OpenAI, local embeddings via `all-minilm` by default |
 | Infra    | Docker Compose, Nginx frontend container, GitHub Actions CI   |
 
 ## Local Quick Start
@@ -114,7 +114,8 @@ The local stack includes:
 - `postgres`
 - `redis`
 - `elasticsearch`
-- `ollama`
+- `thin-llama`
+- `thin-llama-init`
 - `backend`
 - `worker`
 - `frontend`
@@ -152,15 +153,14 @@ The frontend proxies `/api` to the backend through Vite during development.
 
 ### Default local AI setup
 
-- Summary model: `qwen2.5:7b`
+- Summary model: `qwen2.5:3b`
 - Embedding model: `all-minilm`
 - Vector dimensions: `384`
 
-Pull models manually if needed:
+Bootstrap the self-hosted runtime manually if needed:
 
 ```bash
-docker compose exec ollama ollama pull qwen2.5:7b
-docker compose exec ollama ollama pull all-minilm
+docker compose run --rm thin-llama-init
 ```
 
 ### Resume analysis path
@@ -195,11 +195,13 @@ The production stack uses [deploy/docker-compose.prod.yml](deploy/docker-compose
 - PostgreSQL
 - Redis
 - Elasticsearch
-- Ollama
-- `ollama-init` model bootstrap
+- `thin-llama`
+- `thin-llama-init` model bootstrap
 - FastAPI backend
 - Celery worker
 - Frontend served on port `80`
+
+`thin-llama` is treated as an external dependency: deploy scripts fetch it from a pinned Git ref on the server before building the runtime image.
 
 Use the root README for product and setup orientation. Use the deploy README for server preparation, env configuration, and operational commands.
 
@@ -274,7 +276,7 @@ job-seeker/
 
 ## Notes on Tradeoffs
 
-- Ollama-first defaults make the project self-hostable and cheap to run, but model quality and latency depend on local hardware.
+- thin-llama-first defaults make the project self-hostable and cheap to run, but model quality and latency depend on local hardware.
 - Elasticsearch vector search keeps retrieval infrastructure explicit and inspectable, at the cost of managing index lifecycle and rebuilds.
 - Celery + Redis add operational complexity, but they keep imports and embedding sync out of the request path and make long-running jobs reliable.
 - The product is currently specialized around Polish IT sources, but the ingestion architecture is adapter-based rather than hard-coded to one board.

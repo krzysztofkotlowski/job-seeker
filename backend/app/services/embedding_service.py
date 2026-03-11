@@ -5,6 +5,8 @@ import os
 
 import httpx
 
+from app.services.self_hosted_runtime_service import is_self_hosted_model_available
+
 log = logging.getLogger(__name__)
 
 EMBED_URL = os.environ.get("LLM_URL", "").rstrip("/")
@@ -75,27 +77,8 @@ def is_available() -> bool:
 
 
 def is_ollama_model_available(model: str | None) -> bool:
-    """Return True if the requested Ollama embedding model is available."""
-    if not EMBED_URL:
-        return False
-    requested = (model or "").strip() or EMBED_MODEL
-    requested_base = requested.split(":", 1)[0]
-    try:
-        with httpx.Client(timeout=5) as client:
-            resp = client.get(f"{EMBED_URL}/api/tags")
-            if resp.status_code == 200:
-                models = resp.json().get("models") or []
-                for item in models:
-                    name = str(item.get("name") or item.get("model") or "").strip()
-                    if not name:
-                        continue
-                    if name == requested or name.startswith(f"{requested}:"):
-                        return True
-                    if name.split(":", 1)[0] == requested_base:
-                        return True
-    except Exception as e:
-        log.debug("Embedding service check failed: %s", e)
-    return False
+    """Return True if the requested self-hosted embedding model is available."""
+    return is_self_hosted_model_available((model or "").strip() or EMBED_MODEL)
 
 
 def get_ollama_embedding_dims(model: str | None) -> int | None:

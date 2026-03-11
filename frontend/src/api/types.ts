@@ -258,9 +258,12 @@ export interface ResumeAnalyzeResult {
   recommendations?: ResumeRecommendation[];
 }
 
-export interface OllamaModel {
+export interface SelfHostedModel {
   name: string;
   model?: string;
+  role?: "chat" | "embedding";
+  available?: boolean;
+  active?: boolean;
   modified_at?: string;
   size?: number;
   digest?: string;
@@ -270,8 +273,11 @@ export interface OllamaModel {
     families?: string[];
     parameter_size?: string;
     quantization_level?: string;
+    status?: string;
   };
 }
+
+export type OllamaModel = SelfHostedModel;
 
 export type AIProvider = "ollama" | "openai";
 export type AIEmbedSource = "ollama" | "openai";

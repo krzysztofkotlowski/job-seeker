@@ -1000,7 +1000,7 @@ export function ResumeAnalysisPage() {
       setResult((prev) => (prev ? { ...prev, summary: trimmed } : prev));
       if (!trimmed) {
         setSummaryError(
-          "AI summary unavailable. Check Settings > AI Config: ensure your provider is configured (Ollama running or OpenAI API key valid).",
+          "AI summary unavailable. Check Settings > AI Config: ensure your self-hosted runtime is running or your OpenAI API key is valid.",
         );
       }
     } catch (e) {

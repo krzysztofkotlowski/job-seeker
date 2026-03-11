@@ -279,7 +279,7 @@ def _active_embedding_context(db: Session, ai_config: dict | None = None) -> dic
             {
                 "status": "active_embedding_unavailable",
                 "message": (
-                    f"The active embedding model '{active_run.embed_model}' is not available in Ollama."
+                    f"The active embedding model '{active_run.embed_model}' is not available in the self-hosted runtime."
                 ),
             }
         )

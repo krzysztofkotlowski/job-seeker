@@ -49,52 +49,46 @@ services:
     networks:
       - jobseeker
 
-  ollama:
-    image: ollama/ollama:0.17.7
-    deploy:
-      resources:
-        limits:
-          cpus: "${OLLAMA_CPU_LIMIT:-5}"
-          memory: 10G
-    environment:
-      - OLLAMA_HOST=0.0.0.0
-      - OLLAMA_MAX_LOADED_MODELS=1
-      - OLLAMA_NUM_PARALLEL=1
-      - OLLAMA_NUM_THREAD=${OLLAMA_NUM_THREAD:-5}
+  thin-llama:
+    platform: ${THIN_LLAMA_PLATFORM:-linux/amd64}
+    build:
+      context: ${THIN_LLAMA_BUILD_CONTEXT:-../../thin-llama}
+      dockerfile: Dockerfile
+    image: thin-llama:job-seeker-prod
     volumes:
-      - ollama_models:/root/.ollama
+      - thin_llama_models:/models
+      - thin_llama_state:/state
     healthcheck:
-      test: ["CMD-SHELL", "ollama list 2>/dev/null || exit 1"]
-      interval: 5s
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8080/health >/dev/null || exit 1"]
+      interval: 10s
       timeout: 5s
-      retries: 10
-      start_period: 15s
+      retries: 12
+      start_period: 20s
     restart: unless-stopped
     networks:
       - jobseeker
 
-  # One-shot: pull embedding + LLM models before backend starts
-  ollama-init:
-    image: ollama/ollama:0.17.7
+  thin-llama-init:
+    image: curlimages/curl:8.8.0
     entrypoint: ["/bin/sh", "-c"]
     environment:
-      - OLLAMA_HOST=http://ollama:11434
       - EMBED_MODEL=${EMBED_MODEL:-all-minilm}
-      - EMBED_DIMS=${EMBED_DIMS:-384}
-      - LLM_MODEL=${LLM_MODEL:-qwen2.5:7b}
+      - LLM_MODEL=${LLM_MODEL:-qwen2.5:3b}
     command: >
-      echo 'Waiting for Ollama...';
+      echo 'Waiting for thin-llama...';
       for i in $$(seq 1 30); do
-        if ollama list 2>/dev/null; then echo 'Ollama ready.'; break; fi;
+        if curl -sf http://thin-llama:8080/health >/dev/null; then echo 'thin-llama ready.'; break; fi;
         sleep 2;
       done;
       echo 'Pulling embedding model: '$${EMBED_MODEL};
-      ollama pull $$EMBED_MODEL || exit 1;
-      echo 'Pulling LLM model: '$${LLM_MODEL};
-      ollama pull $$LLM_MODEL || exit 1;
+      curl -fsS -X POST http://thin-llama:8080/api/pull -H 'Content-Type: application/json' -d "{\"model\":\"$${EMBED_MODEL}\"}" >/dev/null || exit 1;
+      echo 'Pulling chat model: '$${LLM_MODEL};
+      curl -fsS -X POST http://thin-llama:8080/api/pull -H 'Content-Type: application/json' -d "{\"model\":\"$${LLM_MODEL}\"}" >/dev/null || exit 1;
+      echo 'Activating models...';
+      curl -fsS -X POST http://thin-llama:8080/api/models/active -H 'Content-Type: application/json' -d "{\"chat\":\"$${LLM_MODEL}\",\"embedding\":\"$${EMBED_MODEL}\"}" >/dev/null || exit 1;
       echo 'Models ready.'
     depends_on:
-      ollama:
+      thin-llama:
         condition: service_healthy
     networks:
       - jobseeker
@@ -108,8 +102,8 @@ services:
       - KEYCLOAK_PUBLIC_URL=${KEYCLOAK_PUBLIC_URL:-http://localhost:8080}
       - KEYCLOAK_REALM=jobseeker
       - KEYCLOAK_ENABLED=${KEYCLOAK_ENABLED:-false}
-      - LLM_URL=http://ollama:11434
-      - LLM_MODEL=${LLM_MODEL:-qwen2.5:7b}
+      - LLM_URL=http://thin-llama:8080
+      - LLM_MODEL=${LLM_MODEL:-qwen2.5:3b}
       - LLM_MAX_OUTPUT_TOKENS=${LLM_MAX_OUTPUT_TOKENS:-400}
       - LLM_TIMEOUT=30
       - LLM_SUMMARIZE_TIMEOUT=90
@@ -129,7 +123,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      ollama-init:
+      thin-llama-init:
         condition: service_completed_successfully
     restart: unless-stopped
     healthcheck:
@@ -156,8 +150,8 @@ services:
     command: celery -A app.celery_app.celery_app worker --loglevel=info -Q jobseeker
     environment:
       - DATABASE_URL=postgresql://jobseeker:${POSTGRES_PASSWORD:-jobseeker}@postgres:5432/jobseeker
-      - LLM_URL=http://ollama:11434
-      - LLM_MODEL=${LLM_MODEL:-qwen2.5:7b}
+      - LLM_URL=http://thin-llama:8080
+      - LLM_MODEL=${LLM_MODEL:-qwen2.5:3b}
       - LLM_MAX_OUTPUT_TOKENS=${LLM_MAX_OUTPUT_TOKENS:-400}
       - LLM_TIMEOUT=30
       - LLM_SUMMARIZE_TIMEOUT=90
@@ -176,7 +170,7 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-      ollama-init:
+      thin-llama-init:
         condition: service_completed_successfully
     restart: unless-stopped
     networks:
@@ -184,7 +178,8 @@ services:
 
 volumes:
   pgdata:
-  ollama_models:
+  thin_llama_models:
+  thin_llama_state:
   esdata:
 
 networks:

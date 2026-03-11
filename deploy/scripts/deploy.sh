@@ -21,9 +21,14 @@ readonly SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 readonly PROJECT_ROOT="$(cd "${SCRIPT_DIR}/../.." && pwd)"
 readonly DEFAULT_SERVER="${DEPLOY_SERVER:-kkotlowski@hp-homeserver}"
 readonly DEFAULT_PATH="${DEPLOY_PATH:-/opt/jobseeker}"
+readonly DEFAULT_THIN_LLAMA_GIT_URL="https://github.com/krzysztofkotlowski/thin-llama.git"
+readonly DEFAULT_THIN_LLAMA_GIT_REF="b79c1847988fcf575b2866e1193042656ccc8681"
 
 SERVER="${1:-${DEFAULT_SERVER}}"
 REMOTE_PATH="${DEPLOY_PATH:-${DEFAULT_PATH}}"
+REMOTE_THIN_LLAMA_PATH="${REMOTE_THIN_LLAMA_PATH:-$(dirname "${REMOTE_PATH}")/thin-llama}"
+THIN_LLAMA_GIT_URL="${THIN_LLAMA_GIT_URL:-}"
+THIN_LLAMA_GIT_REF="${THIN_LLAMA_GIT_REF:-}"
 
 log() { echo "[deploy]" "$@"; }
 log_err() { echo "[deploy] ERROR:" "$@" >&2; }
@@ -36,8 +41,7 @@ fi
 
 log "Deploying to ${SERVER}:${REMOTE_PATH}"
 
-# --- Sync files ---
-log "Syncing project files..."
+log "Syncing job-seeker files..."
 rsync -avz --delete \
   --exclude '.git' \
   --exclude 'node_modules' \
@@ -58,27 +62,36 @@ if ! ssh "${SERVER}" "test -f ${REMOTE_PATH}/.env"; then
   log "Edit ${REMOTE_PATH}/.env on the server and set POSTGRES_PASSWORD before first run."
 fi
 
+load_thin_llama_git_config() {
+  local remote_values=""
+  remote_values="$(ssh "${SERVER}" "if test -f '${REMOTE_PATH}/.env'; then set -a; . '${REMOTE_PATH}/.env'; printf '%s\n%s\n' \"\${THIN_LLAMA_GIT_URL:-}\" \"\${THIN_LLAMA_GIT_REF:-}\"; else printf '\n\n'; fi")"
+  local remote_url=""
+  local remote_ref=""
+  remote_url="$(printf '%s' "${remote_values}" | sed -n '1p')"
+  remote_ref="$(printf '%s' "${remote_values}" | sed -n '2p')"
+
+  THIN_LLAMA_GIT_URL="${THIN_LLAMA_GIT_URL:-${remote_url}}"
+  THIN_LLAMA_GIT_REF="${THIN_LLAMA_GIT_REF:-${remote_ref}}"
+  if [[ -z "${THIN_LLAMA_GIT_URL}" ]]; then
+    THIN_LLAMA_GIT_URL="${DEFAULT_THIN_LLAMA_GIT_URL}"
+  fi
+  if [[ -z "${THIN_LLAMA_GIT_REF}" ]]; then
+    THIN_LLAMA_GIT_REF="${DEFAULT_THIN_LLAMA_GIT_REF}"
+  fi
+}
+
+load_thin_llama_git_config
+
+log "Fetching thin-llama from Git..."
+ssh "${SERVER}" "set -euo pipefail; mkdir -p '$(dirname "${REMOTE_THIN_LLAMA_PATH}")'; if [ ! -d '${REMOTE_THIN_LLAMA_PATH}/.git' ]; then git clone '${THIN_LLAMA_GIT_URL}' '${REMOTE_THIN_LLAMA_PATH}'; fi; cd '${REMOTE_THIN_LLAMA_PATH}'; git fetch --tags origin; git checkout --detach '${THIN_LLAMA_GIT_REF}'; git submodule update --init --recursive >/dev/null 2>&1 || true"
+
 # --- Deploy on remote ---
 log "Starting services on remote..."
-ssh "${SERVER}" "cd ${REMOTE_PATH} && docker compose -f deploy/docker-compose.prod.yml up -d --build"
+ssh "${SERVER}" "cd ${REMOTE_PATH} && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f deploy/docker-compose.prod.yml up -d --build"
 
-# --- Ensure Ollama models (belt-and-suspenders: ollama-init may have failed) ---
-log "Ensuring Ollama models (embedding + LLM)..."
-for i in $(seq 1 30); do
-  if ssh "${SERVER}" "cd ${REMOTE_PATH} && docker compose -f deploy/docker-compose.prod.yml exec -T ollama ollama pull all-minilm" 2>/dev/null; then
-    log "Embedding model (all-minilm) ready."
-    break
-  fi
-  log "Waiting for Ollama (attempt ${i}/30)..."
-  sleep 5
-done
-for i in $(seq 1 10); do
-  if ssh "${SERVER}" "cd ${REMOTE_PATH} && docker compose -f deploy/docker-compose.prod.yml exec -T ollama ollama pull qwen2.5:7b" 2>/dev/null; then
-    log "LLM model (qwen2.5:7b) ready."
-    break
-  fi
-  sleep 5
-done
+# --- Ensure thin-llama models (belt-and-suspenders: thin-llama-init in the stack may have run already) ---
+log "Ensuring thin-llama models (embedding + LLM)..."
+ssh "${SERVER}" "cd ${REMOTE_PATH} && THIN_LLAMA_BUILD_CONTEXT='${REMOTE_THIN_LLAMA_PATH}' docker compose -f deploy/docker-compose.prod.yml run --rm thin-llama-init"
 
 log "Deployment complete."
 log "App should be available at http://<server-ip>"

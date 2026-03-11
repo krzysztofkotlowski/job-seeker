@@ -357,13 +357,13 @@ export const api = {
       },
     ),
 
-  /** List available models. Pass provider to force ollama or openai list. */
+  /** List available models. Pass provider to force self-hosted or OpenAI list. */
   aiListModels: (provider?: string) =>
     request<{ models: OllamaModel[] }>(
       provider ? `/ai/models?provider=${provider}` : "/ai/models",
     ),
 
-  /** Ensure Ollama model is available; pull if missing. */
+  /** Ensure a self-hosted model is available; pull if missing. */
   aiEnsureModel: (model: string) =>
     request<{ status: string; error?: string }>("/ai/ensure-model", {
       method: "POST",

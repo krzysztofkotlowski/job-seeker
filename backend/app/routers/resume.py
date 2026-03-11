@@ -228,7 +228,11 @@ async def summarize_match(
     if summary is None:
         msg = (
             "AI summary unavailable. "
-            + ("Check your OpenAI API key and model." if ai_cfg.get("provider") == "openai" else "Ensure Ollama is running with a model (e.g. ollama pull qwen2.5:7b).")
+            + (
+                "Check your OpenAI API key and model."
+                if ai_cfg.get("provider") == "openai"
+                else "Ensure your self-hosted runtime is running and the selected chat model is available."
+            )
         )
         raise HTTPException(503, msg)
 

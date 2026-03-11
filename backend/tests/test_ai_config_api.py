@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
+from app.services import ai_config_service
 from app.services.ai_config_service import (
     OLLAMA_EMBED_DIMS,
     OPENAI_EMBED_DIMS,
@@ -18,6 +19,30 @@ def test_ai_list_models_returns_empty_when_ollama_unavailable(client: TestClient
         r = client.get("/api/v1/ai/models")
     assert r.status_code == 200
     assert r.json()["models"] == []
+
+
+def test_list_ollama_models_prefers_self_hosted_catalog():
+    """thin-llama catalog payload is normalized and preferred over installed tags."""
+    payload = {
+        "runtime": "thin-llama",
+        "active": {"chat": "qwen2.5:3b", "embedding": "all-minilm"},
+        "models": [
+            {"name": "qwen2.5:3b", "role": "chat", "available": True, "active": True},
+            {
+                "name": "all-minilm",
+                "role": "embedding",
+                "available": False,
+                "active": False,
+                "details": {"status": "missing"},
+            },
+        ],
+    }
+    with patch("app.services.ai_config_service.list_self_hosted_models", return_value=payload):
+        result = ai_config_service.list_ollama_models()
+    assert result["runtime"] == "thin-llama"
+    assert result["active"]["chat"] == "qwen2.5:3b"
+    assert result["models"][0]["role"] == "chat"
+    assert result["models"][1]["details"]["status"] == "missing"
 
 
 def test_ai_get_config_returns_defaults(client: TestClient):
@@ -106,6 +131,25 @@ def test_ai_put_config_resolves_ollama_embed_dims_from_model(client: TestClient)
     data = r.json()
     assert data["embed_model"] == "nomic-embed-text"
     assert data["embed_dims"] == 768
+
+
+def test_ai_put_config_best_effort_activates_self_hosted_models(client: TestClient):
+    """Saving self-hosted config aligns active models when the runtime supports it."""
+    with patch("app.services.ai_config_service._best_effort_activate_self_hosted_models") as activate:
+        r = client.put(
+            "/api/v1/ai/config",
+            json={
+                "provider": "ollama",
+                "embed_source": "ollama",
+                "llm_model": "qwen2.5:3b",
+                "embed_model": "all-minilm",
+            },
+        )
+    assert r.status_code == 200
+    activate.assert_called_once_with(
+        chat_model="qwen2.5:3b",
+        embed_model="all-minilm",
+    )
 
 
 def test_ai_metrics_returns_structure(client: TestClient):

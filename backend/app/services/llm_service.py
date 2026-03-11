@@ -10,6 +10,8 @@ from dataclasses import dataclass
 
 import httpx
 
+from app.services.self_hosted_runtime_service import is_self_hosted_model_available
+
 log = logging.getLogger(__name__)
 
 # Retry config for OpenAI 429 (user prefers no retries; set to 1 = single attempt)
@@ -131,7 +133,7 @@ _INJECTION_PATTERNS = (
 )
 _INJECTION_RE = re.compile("|".join(f"({p})" for p in _INJECTION_PATTERNS), re.IGNORECASE)
 
-DEFAULT_LLM_MODEL = "qwen2.5:7b"
+DEFAULT_LLM_MODEL = "qwen2.5:3b"
 
 
 @dataclass
@@ -391,17 +393,9 @@ async def check_ollama_health(model: str | None = None) -> bool:
     if not target_model:
         return False
     try:
-        async with httpx.AsyncClient(timeout=10) as client:
-            resp = await client.get(f"{cfg.url}/api/tags")
-            if resp.status_code != 200:
-                return False
-            models = resp.json().get("models") or []
-            return any(
-                m.get("name", "").startswith(target_model) or target_model in m.get("name", "")
-                for m in models
-            )
+        return is_self_hosted_model_available(target_model)
     except Exception as e:
-        log.debug("Ollama health check failed: %s", e)
+        log.debug("Self-hosted runtime health check failed: %s", e)
         return False
 
 
@@ -760,7 +754,7 @@ async def summarize_resume_match_stream(
         yield {"error": "Summary timed out. Try again."}
     except httpx.HTTPStatusError as e:
         log.warning("LLM API error: %s", e)
-        yield {"error": f"Ollama error: {e.response.status_code}"}
+        yield {"error": f"Self-hosted runtime error: {e.response.status_code}"}
     except Exception as e:
         log.warning("LLM stream failed: %s", e)
         yield {"error": f"AI summary failed: {e!s}"}

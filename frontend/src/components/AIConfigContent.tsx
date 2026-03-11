@@ -24,19 +24,13 @@ import type {
   AIConfigUpdate,
   AIProvider,
   AIEmbedSource,
-  OllamaModel,
+  SelfHostedModel,
   AIMetrics,
 } from "../api/types";
 import { useToast } from "../contexts/useToast";
 
-const OLLAMA_LLM_OPTIONS = [
-  "qwen2.5:7b",
-  "qwen3:4b",
-  "qwen3:8b",
-  "llama3.2:3b",
-  "phi3:mini",
-];
-const DEFAULT_LLM_MODEL = "qwen2.5:7b";
+const SELF_HOSTED_LLM_OPTIONS = ["qwen2.5:3b"];
+const DEFAULT_LLM_MODEL = "qwen2.5:3b";
 
 const EMBED_FAMILIES = ["nomic", "all-minilm", "mxbai", "bge"];
 
@@ -57,14 +51,16 @@ const OPENAI_LLM_MODELS = [
   "gpt-3.5-turbo",
 ];
 
-function isEmbeddingModel(m: OllamaModel): boolean {
+function isEmbeddingModel(m: SelfHostedModel): boolean {
+  if (m.role === "embedding") return true;
+  if (m.role === "chat") return false;
   const name = (m.name || m.model || "").toLowerCase();
   return EMBED_FAMILIES.some((f) => name.includes(f)) || name.includes("embed");
 }
 
 export function AIConfigContent() {
   const toast = useToast();
-  const [models, setModels] = useState<OllamaModel[]>([]);
+  const [models, setModels] = useState<SelfHostedModel[]>([]);
   const [config, setConfig] = useState<AIConfig | null>(null);
   const [metrics, setMetrics] = useState<AIMetrics | null>(null);
   const [loading, setLoading] = useState(true);
@@ -82,9 +78,9 @@ export function AIConfigContent() {
   const [temperature, setTemperature] = useState(0.3);
   const [maxOutputTokens, setMaxOutputTokens] = useState(1024);
 
-  const fetchModels = (p: AIProvider) => {
+  const fetchModels = () => {
     api
-      .aiListModels(p)
+      .aiListModels("ollama")
       .then((res) => setModels(res.models || []))
       .catch(() => setModels([]));
   };
@@ -119,8 +115,8 @@ export function AIConfigContent() {
   }, [toast]);
 
   useEffect(() => {
-    if (!loading) fetchModels(provider);
-  }, [provider, loading]);
+    if (!loading) fetchModels();
+  }, [loading]);
 
   useEffect(() => {
     api
@@ -145,14 +141,32 @@ export function AIConfigContent() {
       payload.openai_api_key = openaiApiKey.trim();
     }
     try {
-      if (provider === "ollama" && payload.llm_model) {
+      const modelsToEnsure = Array.from(
+        new Set(
+          [
+            provider === "ollama" ? payload.llm_model : undefined,
+            embedSource === "ollama" ? payload.embed_model : undefined,
+          ]
+            .map((model) => (model || "").trim())
+            .filter(Boolean),
+        ),
+      );
+      if (modelsToEnsure.length > 0) {
         setEnsuringModel(true);
-        const ensure = await api.aiEnsureModel(payload.llm_model);
-        setEnsuringModel(false);
-        if (ensure.status === "error") {
-          toast.showError(ensure.error || "Failed to ensure model");
-          setSaving(false);
-          return;
+        try {
+          for (const modelName of modelsToEnsure) {
+            const ensure = await api.aiEnsureModel(modelName);
+            if (ensure.status === "error") {
+              toast.showError(
+                ensure.error ||
+                  `Failed to ensure self-hosted model '${modelName}'`,
+              );
+              setSaving(false);
+              return;
+            }
+          }
+        } finally {
+          setEnsuringModel(false);
         }
       }
       const updated = await api.aiUpdateConfig(payload);
@@ -163,8 +177,8 @@ export function AIConfigContent() {
       setEmbedModel(updated.embed_model || embedModel);
       setOpenaiApiKey("");
       toast.showSuccess("AI config saved");
-      if (provider === "ollama") {
-        fetchModels("ollama");
+      if (provider === "ollama" || embedSource === "ollama") {
+        fetchModels();
         fetch("/api/v1/health")
           .then((r) => r.json())
           .then((h: { llm_available?: boolean }) =>
@@ -198,19 +212,19 @@ export function AIConfigContent() {
     config?.api_key_set === true ||
     (provider === "openai" && openaiApiKey.trim().length > 0);
 
-  const llmModelsFromOllama = models.filter((m) => !isEmbeddingModel(m));
-  const recommendedAsModels = OLLAMA_LLM_OPTIONS.map((name) => ({
+  const selfHostedLlmModels = models.filter((m) => !isEmbeddingModel(m));
+  const recommendedAsModels = SELF_HOSTED_LLM_OPTIONS.map((name) => ({
     name,
     model: name,
   }));
-  const pulledNames = new Set(llmModelsFromOllama.map((m) => m.name));
+  const pulledNames = new Set(selfHostedLlmModels.map((m) => m.name));
   const llmSelectOptions =
     provider === "ollama"
       ? [
-          ...llmModelsFromOllama,
+          ...selfHostedLlmModels,
           ...recommendedAsModels.filter((m) => !pulledNames.has(m.name)),
         ]
-      : llmModelsFromOllama;
+      : selfHostedLlmModels;
   const llmSelectValue = llmModel || DEFAULT_LLM_MODEL;
   let embedModels = models.filter((m) => isEmbeddingModel(m));
   if (embedModels.length === 0) embedModels = [...models];
@@ -250,7 +264,7 @@ export function AIConfigContent() {
           onChange={(_, v) => v && setProvider(v as AIProvider)}
           size="small"
         >
-          <ToggleButton value="ollama">Self-hosted (Ollama)</ToggleButton>
+          <ToggleButton value="ollama">Self-hosted runtime</ToggleButton>
           <ToggleButton value="openai">OpenAI API</ToggleButton>
         </ToggleButtonGroup>
       </Paper>
@@ -259,8 +273,9 @@ export function AIConfigContent() {
         <>
           {llmAvailable === false && (
             <Alert severity="warning">
-              Ollama is not available. Start Ollama and pull a model (e.g.
-              ollama pull qwen2.5:7b) to use AI summaries.
+              The self-hosted runtime is not available. Start thin-llama or
+              another compatible runtime, then ensure your selected chat and
+              embedding models are pulled.
             </Alert>
           )}
 
@@ -411,7 +426,7 @@ export function AIConfigContent() {
                 <FormControlLabel
                   value="ollama"
                   control={<Radio size="small" />}
-                  label="Ollama (if available)"
+                  label="Self-hosted runtime (if available)"
                 />
               </RadioGroup>
             </Box>
