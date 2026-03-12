@@ -4,6 +4,8 @@ set -eu
 THIN_LLAMA_URL="${THIN_LLAMA_URL:-http://thin-llama:8080}"
 EMBED_MODEL="${EMBED_MODEL:-bge-base-en:v1.5}"
 LLM_MODEL="${LLM_MODEL:-qwen2.5:7b}"
+SMOKE_ATTEMPTS="${SMOKE_ATTEMPTS:-12}"
+SMOKE_DELAY_SECONDS="${SMOKE_DELAY_SECONDS:-3}"
 
 extract_embedding_pid() {
   health_json="$1"
@@ -66,6 +68,32 @@ post_json() {
   cat "$outfile"
 }
 
+post_json_retry() {
+  endpoint="$1"
+  body="$2"
+  outfile="$3"
+  attempts="$4"
+  delay_seconds="$5"
+
+  attempt=1
+  while [ "$attempt" -le "$attempts" ]; do
+    code="$(curl -sS -o "$outfile" -w "%{http_code}" -X POST "$THIN_LLAMA_URL$endpoint" -H 'Content-Type: application/json' -d "$body")"
+    if [ "$code" -ge 200 ] && [ "$code" -lt 300 ]; then
+      cat "$outfile"
+      return 0
+    fi
+    if [ "$attempt" -lt "$attempts" ]; then
+      echo "Request to $endpoint returned status $code on attempt $attempt/$attempts; retrying in ${delay_seconds}s..."
+      sleep "$delay_seconds"
+    fi
+    attempt=$((attempt + 1))
+  done
+
+  echo "Request to $endpoint failed with status $code after $attempts attempts"
+  cat "$outfile"
+  exit 1
+}
+
 echo "Waiting for thin-llama control plane..."
 for _ in $(seq 1 30); do
   if curl -sf "$THIN_LLAMA_URL/health" >/dev/null; then
@@ -88,7 +116,7 @@ echo "Waiting for runtime-ready models..."
 wait_for_runtime
 
 echo "Running chat smoke test..."
-post_json "/api/chat" "{\"model\":\"$LLM_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with: OK\"}],\"stream\":false}" /tmp/chat-smoke.out
+post_json_retry "/api/chat" "{\"model\":\"$LLM_MODEL\",\"messages\":[{\"role\":\"user\",\"content\":\"Reply with: OK\"}],\"stream\":false}" /tmp/chat-smoke.out "$SMOKE_ATTEMPTS" "$SMOKE_DELAY_SECONDS"
 if ! grep -q '"done":true' /tmp/chat-smoke.out; then
   echo "Chat smoke test did not return a completed response."
   cat /tmp/chat-smoke.out
@@ -105,7 +133,7 @@ fi
 
 echo "Running repeated embedding smoke tests..."
 for attempt in 1 2 3; do
-  post_json "/api/embed" "{\"model\":\"$EMBED_MODEL\",\"input\":[\"hello world\",\"vector search\"]}" "/tmp/embed-smoke-${attempt}.out"
+  post_json_retry "/api/embed" "{\"model\":\"$EMBED_MODEL\",\"input\":[\"hello world\",\"vector search\"]}" "/tmp/embed-smoke-${attempt}.out" "$SMOKE_ATTEMPTS" "$SMOKE_DELAY_SECONDS"
   if ! grep -q '"embeddings"' "/tmp/embed-smoke-${attempt}.out"; then
     echo "Embedding smoke test ${attempt} did not return embeddings."
     cat "/tmp/embed-smoke-${attempt}.out"
