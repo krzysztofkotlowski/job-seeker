@@ -4,6 +4,8 @@ AI job-intelligence platform for sourcing jobs, indexing them for semantic retri
 
 **Related project:** [thin-llama](https://github.com/krzysztofkotlowski/thin-llama) — self-hosted llama.cpp runtime with an Ollama-compatible API, used by this app for local chat and embeddings.
 
+[![thin-llama](https://img.shields.io/badge/thin--llama-Go%20wrapper%20for%20llama.cpp-blue?style=flat-square&logo=github)](https://github.com/krzysztofkotlowski/thin-llama)
+
 ---
 
 ## Architecture
@@ -64,11 +66,15 @@ flowchart LR
 
 Job Seeker Tracker combines a React frontend, FastAPI backend, PostgreSQL, Elasticsearch, Redis, Celery, and a self-hosted/OpenAI model layer into one end-to-end system. It ingests real job data from Polish IT job boards, normalizes and deduplicates listings, builds a managed vector index for recommendations, and lets a user move from raw job aggregation to AI-assisted resume analysis inside one product.
 
-![Jobs list](assets/job-seeker-jobs-view.png)
+<p align="center">
+  <img src="assets/job-seeker-jobs-view.png" alt="Jobs list" width="100%" />
+</p>
 
 The dashboard gives an overview of the indexed dataset and import status:
 
-![Dashboard](assets/job-seeker-dashboard.gif)
+<p align="center">
+  <img src="assets/job-seeker-dashboard.gif" alt="Dashboard" width="100%" />
+</p>
 
 From a portfolio perspective, this is not a UI-only app or an isolated AI demo. It shows full ownership of product delivery across ingestion, async pipelines, search infrastructure, AI integration, production deployment, and frontend UX.
 
@@ -89,18 +95,24 @@ From a portfolio perspective, this is not a UI-only app or an isolated AI demo. 
 - Filter, group duplicates, inspect details, and track application state
 - Upload a PDF resume and extract skills matched against imported jobs — the app embeds your skills and runs hybrid search (keyword + semantic) over the indexed jobs:
 
-![Resume analysis](assets/job-seeker-resume-view.gif)
+<p align="center">
+  <img src="assets/job-seeker-resume-view.gif" alt="Resume analysis" width="100%" />
+</p>
 
 - Generate hybrid recommendations from the active semantic index
 - Produce AI summaries and career guidance with thin-llama or OpenAI
 - Configure LLM and embedding providers from the UI:
 
-![AI settings](assets/job-seeker-settings.gif)
+<p align="center">
+  <img src="assets/job-seeker-settings.gif" alt="AI settings" width="100%" />
+</p>
 
 - Run persistent embedding sync with tracked progress and active-index cutover
 - Explore skills, salary trends, and dashboard analytics:
 
-![Skills view](assets/job-seeker-skills-view.png)
+<p align="center">
+  <img src="assets/job-seeker-skills-view.png" alt="Skills view" width="100%" />
+</p>
 
 - Enable optional Keycloak auth for protected operations
 
