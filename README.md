@@ -6,24 +6,6 @@ AI job-intelligence platform for sourcing jobs, indexing them for semantic retri
 
 ---
 
-## Screenshots
-
-![Jobs view](assets/job-seeker-jobs-view.png)
-
-![Skills view](assets/job-seeker-skills-view.png)
-
-## Demo Videos
-
-| Demo | Video |
-|------|-------|
-| Dashboard | [job-seeker-dashboard.mp4](assets/job-seeker-dashboard.mp4) |
-| Resume analysis | [job-seeker-resume-view.mp4](assets/job-seeker-resume-view.mp4) |
-| Settings / AI config | [job-seeker-settings.mp4](assets/job-seeker-settings.mp4) |
-
-Videos are 3× sped up. To regenerate from `.mov` sources, run `./assets/convert-videos.sh` (requires [ffmpeg](https://ffmpeg.org/)).
-
----
-
 ## Architecture
 
 ### System overview
@@ -82,6 +64,12 @@ flowchart LR
 
 Job Seeker Tracker combines a React frontend, FastAPI backend, PostgreSQL, Elasticsearch, Redis, Celery, and a self-hosted/OpenAI model layer into one end-to-end system. It ingests real job data from Polish IT job boards, normalizes and deduplicates listings, builds a managed vector index for recommendations, and lets a user move from raw job aggregation to AI-assisted resume analysis inside one product.
 
+![Jobs list](assets/job-seeker-jobs-view.png)
+
+The dashboard gives an overview of the indexed dataset and import status:
+
+![Dashboard](assets/job-seeker-dashboard.gif)
+
 From a portfolio perspective, this is not a UI-only app or an isolated AI demo. It shows full ownership of product delivery across ingestion, async pipelines, search infrastructure, AI integration, production deployment, and frontend UX.
 
 ## Tech Stack
@@ -99,12 +87,21 @@ From a portfolio perspective, this is not a UI-only app or an isolated AI demo. 
 
 - Aggregate jobs from JustJoin.it and NoFluffJobs into a unified dataset
 - Filter, group duplicates, inspect details, and track application state
-- Upload a PDF resume and extract skills matched against imported jobs
+- Upload a PDF resume and extract skills matched against imported jobs — the app embeds your skills and runs hybrid search (keyword + semantic) over the indexed jobs:
+
+![Resume analysis](assets/job-seeker-resume-view.gif)
+
 - Generate hybrid recommendations from the active semantic index
 - Produce AI summaries and career guidance with thin-llama or OpenAI
-- Configure LLM and embedding providers from the UI
+- Configure LLM and embedding providers from the UI:
+
+![AI settings](assets/job-seeker-settings.gif)
+
 - Run persistent embedding sync with tracked progress and active-index cutover
-- Explore skills, salary trends, and dashboard analytics
+- Explore skills, salary trends, and dashboard analytics:
+
+![Skills view](assets/job-seeker-skills-view.png)
+
 - Enable optional Keycloak auth for protected operations
 
 ---
@@ -200,8 +197,8 @@ job-seeker/
 │   └── README.md
 ├── assets/
 │   ├── *.png              # screenshots
-│   ├── *.mp4              # demo videos (run convert-videos.sh to generate)
-│   └── convert-videos.sh  # ffmpeg script for video conversion
+│   ├── *.gif              # demo GIFs (run ./assets/convert-videos.sh to generate from .mov)
+│   └── convert-videos.sh  # ffmpeg script: .mov → .mp4 + .gif
 ├── docs/
 │   ├── KEYCLOAK_SETUP.md
 │   ├── TESTING_PLAN.md
