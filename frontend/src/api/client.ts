@@ -465,39 +465,46 @@ export const api = {
     const decoder = new TextDecoder();
     let full = "";
     let recommendations: ResumeRecommendation[] = [];
+    let buffer = "";
+    const processLine = (rawLine: string) => {
+      const line = rawLine.trimEnd();
+      if (!line.startsWith("data: ")) return;
+      try {
+        const parsed = JSON.parse(line.slice(6)) as {
+          chunk?: string;
+          error?: string;
+          done?: boolean;
+          recommendations?: ResumeRecommendation[];
+        };
+        if (parsed.error) {
+          throw new Error(parsed.error);
+        }
+        if (typeof parsed.chunk === "string") {
+          full += parsed.chunk;
+          onChunk(parsed.chunk);
+        }
+        if (parsed.done && Array.isArray(parsed.recommendations)) {
+          recommendations = parsed.recommendations;
+        }
+      } catch (error) {
+        if (error instanceof SyntaxError) {
+          return;
+        }
+        throw error;
+      }
+    };
     while (true) {
       const { done, value } = await reader.read();
-      if (done) break;
-      const text = decoder.decode(value, { stream: true });
-      const lines = text.split("\n");
-      for (const line of lines) {
-        if (line.startsWith("data: ")) {
-          try {
-            const parsed = JSON.parse(line.slice(6)) as {
-              chunk?: string;
-              error?: string;
-              done?: boolean;
-              recommendations?: ResumeRecommendation[];
-            };
-            if (parsed.error) {
-              throw new Error(parsed.error);
-            }
-            if (typeof parsed.chunk === "string") {
-              full += parsed.chunk;
-              onChunk(parsed.chunk);
-            }
-            if (parsed.done && Array.isArray(parsed.recommendations)) {
-              recommendations = parsed.recommendations;
-            }
-          } catch (error) {
-            if (error instanceof SyntaxError) {
-              continue;
-            }
-            throw error;
-          }
-        }
+      if (done) {
+        buffer += decoder.decode();
+        break;
       }
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
+      for (const line of lines) processLine(line);
     }
+    if (buffer) processLine(buffer);
     return { summary: full, recommendations };
   },
 };
