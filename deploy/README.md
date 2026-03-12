@@ -28,7 +28,7 @@ The deploy scripts now fetch `thin-llama` directly on the server from Git. Set t
 
 ```bash
 THIN_LLAMA_GIT_URL=https://github.com/krzysztofkotlowski/thin-llama.git
-THIN_LLAMA_GIT_REF=fb1dfe4234a49e9da248635b8d5be1dabfe3be10
+THIN_LLAMA_GIT_REF=950969e1783d9f5e0cb802cc82552384de43c6be
 ```
 
 Use a tag or commit SHA for `THIN_LLAMA_GIT_REF`. The deploy scripts clone the repo if missing, fetch tags, and check out that pinned ref in detached HEAD mode before building the runtime image.
@@ -73,7 +73,7 @@ Open `http://<server-ip>` in your browser. The frontend serves on port 80 and pr
 | `POSTGRES_PASSWORD` | PostgreSQL password | `jobseeker` |
 | `LLM_MODEL` | Self-hosted chat model for resume summaries | `qwen2.5:7b` |
 | `EMBED_MODEL` | Self-hosted embedding model for RAG | `bge-base-en:v1.5` |
-| `EMBED_BULK_BATCH_SIZE` | Self-hosted embedding batch size during indexing | `8` |
+| `EMBED_BULK_BATCH_SIZE` | Self-hosted embedding batch size during indexing | `16` |
 | `LLM_MAX_OUTPUT_TOKENS` | Max tokens for AI output | `400` |
 | `RAG_ENABLED` | Enable semantic search | `true` |
 | `THIN_LLAMA_GIT_URL` | Git source for the self-hosted runtime | `https://github.com/krzysztofkotlowski/thin-llama.git` |

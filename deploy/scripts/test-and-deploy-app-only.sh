@@ -22,7 +22,7 @@ readonly DEFAULT_SERVER="${DEPLOY_SERVER:-kkotlowski@hp-homeserver}"
 readonly DEFAULT_PATH="${DEPLOY_PATH:-/opt/jobseeker}"
 readonly COMPOSE_FILE="deploy/docker-compose.prod.yml"
 readonly DEFAULT_THIN_LLAMA_GIT_URL="https://github.com/krzysztofkotlowski/thin-llama.git"
-readonly DEFAULT_THIN_LLAMA_GIT_REF="fb1dfe4234a49e9da248635b8d5be1dabfe3be10"
+readonly DEFAULT_THIN_LLAMA_GIT_REF="950969e1783d9f5e0cb802cc82552384de43c6be"
 
 SERVER="${1:-${DEFAULT_SERVER}}"
 REMOTE_PATH="${DEPLOY_PATH:-${DEFAULT_PATH}}"
