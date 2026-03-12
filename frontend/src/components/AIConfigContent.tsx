@@ -30,7 +30,7 @@ import type {
 import { useToast } from "../contexts/useToast";
 
 const DEFAULT_LLM_MODEL = "qwen2.5:7b";
-const DEFAULT_EMBED_MODEL = "bge-base-en:v1.5";
+const DEFAULT_EMBED_MODEL = "nomic-embed-text";
 
 const EMBED_FAMILIES = ["nomic", "all-minilm", "mxbai", "bge"];
 

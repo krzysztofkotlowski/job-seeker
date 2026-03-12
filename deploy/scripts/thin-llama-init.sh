@@ -2,7 +2,7 @@
 set -eu
 
 THIN_LLAMA_URL="${THIN_LLAMA_URL:-http://thin-llama:8080}"
-EMBED_MODEL="${EMBED_MODEL:-bge-base-en:v1.5}"
+EMBED_MODEL="${EMBED_MODEL:-nomic-embed-text}"
 LLM_MODEL="${LLM_MODEL:-qwen2.5:7b}"
 SMOKE_ATTEMPTS="${SMOKE_ATTEMPTS:-12}"
 SMOKE_DELAY_SECONDS="${SMOKE_DELAY_SECONDS:-3}"
@@ -140,6 +140,23 @@ for attempt in 1 2 3; do
     exit 1
   fi
 done
+
+case "$EMBED_MODEL" in
+  *nomic-embed-text*)
+    echo "Running long-document embedding smoke test..."
+    realistic_long_embed=""
+    for _ in $(seq 1 24); do
+      realistic_long_embed="${realistic_long_embed} Senior backend engineer building Python APIs with PostgreSQL, Docker, distributed systems, CI pipelines, monitoring, remote collaboration, and production incident response."
+    done
+    long_embed_body="$(printf '{"model":"%s","input":"%s"}' "$EMBED_MODEL" "$realistic_long_embed")"
+    post_json_retry "/api/embed" "$long_embed_body" /tmp/embed-smoke-long.out "$SMOKE_ATTEMPTS" "$SMOKE_DELAY_SECONDS"
+    if ! grep -q '"embeddings"' /tmp/embed-smoke-long.out; then
+      echo "Long-document embedding smoke test did not return embeddings."
+      cat /tmp/embed-smoke-long.out
+      exit 1
+    fi
+    ;;
+esac
 
 echo "Re-checking runtime after smoke tests..."
 wait_for_runtime

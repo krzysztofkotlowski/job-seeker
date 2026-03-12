@@ -17,6 +17,12 @@ from app.services.ai_config_service import (
     resolve_ollama_embed_dims,
     update_ai_config,
 )
+from app.services.embedding_profiles import (
+    EMBED_PROFILE_NOMIC_LEGACY,
+    EMBED_PROFILE_NOMIC_SEARCH,
+    resolve_run_embed_profile,
+    resolve_selected_embed_profile,
+)
 from app.services.embedding_service import OPENAI_EMBED_MODEL, OPENAI_EMBED_DIMS
 from app.services.elasticsearch_service import (
     JOBS_INDEX_ALIAS,
@@ -51,13 +57,18 @@ class IncrementalReindexRequiredError(EmbeddingSyncError):
     """Raised when incremental indexing is not compatible with the active run."""
 
 
-def _effective_embed_settings(ai_cfg: dict[str, Any]) -> tuple[str, str, int]:
+def _effective_embed_settings(ai_cfg: dict[str, Any]) -> tuple[str, str, int, str]:
     source = str(ai_cfg.get("embed_source") or "ollama").strip().lower()
     if source == "openai":
-        return source, OPENAI_EMBED_MODEL, OPENAI_EMBED_DIMS
-    model = str(ai_cfg.get("embed_model") or "").strip() or "bge-base-en:v1.5"
+        return (
+            source,
+            OPENAI_EMBED_MODEL,
+            OPENAI_EMBED_DIMS,
+            resolve_selected_embed_profile(source, OPENAI_EMBED_MODEL, ai_cfg.get("embed_profile")),
+        )
+    model = str(ai_cfg.get("embed_model") or "").strip() or "nomic-embed-text"
     dims = resolve_ollama_embed_dims(model, int(ai_cfg.get("embed_dims") or 0) or 768)
-    return source, model, dims
+    return source, model, dims, resolve_selected_embed_profile(source, model, ai_cfg.get("embed_profile"))
 
 
 def serialize_run(row: EmbeddingSyncRunRow | None) -> dict[str, Any] | None:
@@ -71,6 +82,11 @@ def serialize_run(row: EmbeddingSyncRunRow | None) -> dict[str, Any] | None:
         "embed_source": row.embed_source,
         "embed_model": row.embed_model,
         "embed_dims": int(row.embed_dims or 0),
+        "embed_profile": resolve_run_embed_profile(
+            row.embed_source,
+            row.embed_model,
+            getattr(row, "embed_profile", None),
+        ),
         "db_total_snapshot": int(row.db_total_snapshot or 0),
         "selection_total": int(row.selection_total or 0),
         "target_total": int(row.target_total or 0),
@@ -98,11 +114,16 @@ def _selected_jobs(db: Session, unique_only: bool) -> list[JobRow]:
 def _config_matches_run(ai_cfg: dict[str, Any], run: EmbeddingSyncRunRow | None) -> bool:
     if not run:
         return False
-    source, model, dims = _effective_embed_settings(ai_cfg)
+    source, model, dims, profile = _effective_embed_settings(ai_cfg)
     return (
         run.embed_source == source
         and run.embed_model == model
         and int(run.embed_dims or 0) == int(dims)
+        and resolve_run_embed_profile(
+            run.embed_source,
+            run.embed_model,
+            getattr(run, "embed_profile", None),
+        ) == profile
     )
 
 
@@ -203,6 +224,164 @@ def _run_is_queryable(
     return int(active_indexed_documents or 0) > 0
 
 
+def _recommendation_status_payload(
+    *,
+    status: str,
+    message: str | None,
+    active_run: EmbeddingSyncRunRow | None,
+    ai_cfg: dict[str, Any],
+    active_query_model_ready: bool,
+) -> dict[str, Any]:
+    _, selected_embed_model, selected_embed_dims, selected_embed_profile = _effective_embed_settings(ai_cfg)
+    return {
+        "status": status,
+        "message": message,
+        "active_embed_model": active_run.embed_model if active_run else None,
+        "active_embed_dims": int(active_run.embed_dims or 0) if active_run else 0,
+        "active_embed_profile": (
+            resolve_run_embed_profile(
+                active_run.embed_source,
+                active_run.embed_model,
+                getattr(active_run, "embed_profile", None),
+            )
+            if active_run
+            else None
+        ),
+        "selected_embed_model": selected_embed_model,
+        "selected_embed_dims": int(selected_embed_dims or 0),
+        "selected_embed_profile": selected_embed_profile,
+        "active_query_model_ready": bool(active_query_model_ready),
+    }
+
+
+def get_recommendation_readiness(
+    db: Session,
+    *,
+    ai_cfg: dict[str, Any] | None = None,
+    active_run: EmbeddingSyncRunRow | None = None,
+    active_index_name: str | None = None,
+    active_indexed_documents: int | None = None,
+) -> dict[str, Any]:
+    current_ai_cfg = ai_cfg or get_ai_config(db)
+    current_active_run = active_run if active_run is not None else get_active_run(db)
+    current_active_index_name = active_index_name
+    current_active_docs = active_indexed_documents
+
+    if current_active_run and current_active_index_name is None:
+        current_active_index_name = current_active_run.index_alias or current_active_run.physical_index_name
+    if current_active_docs is None:
+        current_active_docs = (
+            count_documents(current_active_index_name)
+            if current_active_index_name and es_available()
+            else 0
+        )
+
+    if not current_active_run:
+        return _recommendation_status_payload(
+            status="reindex_required",
+            message="No active embedding index. Run a full re-index first.",
+            active_run=None,
+            ai_cfg=current_ai_cfg,
+            active_query_model_ready=False,
+        )
+
+    if not _run_is_queryable(
+        current_active_run,
+        active_indexed_documents=int(current_active_docs or 0),
+    ):
+        return _recommendation_status_payload(
+            status="reindex_required",
+            message="The active embedding index is incomplete or empty. Run a full re-index.",
+            active_run=current_active_run,
+            ai_cfg=current_ai_cfg,
+            active_query_model_ready=False,
+        )
+
+    selected_source, selected_embed_model, selected_embed_dims, selected_embed_profile = _effective_embed_settings(current_ai_cfg)
+    active_embed_profile = resolve_run_embed_profile(
+        current_active_run.embed_source,
+        current_active_run.embed_model,
+        getattr(current_active_run, "embed_profile", None),
+    )
+
+    if (
+        current_active_run.embed_source != selected_source
+        or current_active_run.embed_model != selected_embed_model
+        or int(current_active_run.embed_dims or 0) != int(selected_embed_dims or 0)
+        or active_embed_profile != selected_embed_profile
+    ):
+        if current_active_run.embed_model == selected_embed_model and (
+            active_embed_profile == EMBED_PROFILE_NOMIC_LEGACY
+            and selected_embed_profile == EMBED_PROFILE_NOMIC_SEARCH
+        ):
+            message = (
+                "The active embedding index still uses the legacy raw-text nomic profile, "
+                "but the current configuration uses prefix-correct nomic search embeddings. "
+                "Run a full rebuild to activate the new index."
+            )
+        else:
+            message = (
+                f"The active embedding index was built with '{current_active_run.embed_model}' "
+                f"({active_embed_profile}), but the current embedding configuration uses "
+                f"'{selected_embed_model}' ({selected_embed_profile}). "
+                "Run a full rebuild to activate the new index."
+            )
+        return _recommendation_status_payload(
+            status="reindex_required",
+            message=message,
+            active_run=current_active_run,
+            ai_cfg=current_ai_cfg,
+            active_query_model_ready=False,
+        )
+
+    if current_active_run.embed_source == "openai":
+        api_key = str(current_ai_cfg.get("openai_api_key") or "").strip()
+        if not api_key:
+            return _recommendation_status_payload(
+                status="active_embedding_unavailable",
+                message=(
+                    "The active recommendation index was built with OpenAI embeddings, "
+                    "but no OpenAI API key is configured for query embeddings."
+                ),
+                active_run=current_active_run,
+                ai_cfg=current_ai_cfg,
+                active_query_model_ready=False,
+            )
+        return _recommendation_status_payload(
+            status="ok",
+            message=None,
+            active_run=current_active_run,
+            ai_cfg=current_ai_cfg,
+            active_query_model_ready=True,
+        )
+
+    from app.services.embedding_service import is_ollama_model_ready
+
+    if not is_ollama_model_ready(current_active_run.embed_model):
+        selected_suffix = ""
+        if selected_embed_model and selected_embed_model != current_active_run.embed_model:
+            selected_suffix = f" thin-llama is currently serving '{selected_embed_model}'."
+        return _recommendation_status_payload(
+            status="active_embedding_unavailable",
+            message=(
+                f"The active embedding index still uses '{current_active_run.embed_model}', "
+                f"which is not queryable in thin-llama.{selected_suffix} "
+                "Recommendations are unavailable until a successful full rebuild activates the new index."
+            ),
+            active_run=current_active_run,
+            ai_cfg=current_ai_cfg,
+            active_query_model_ready=False,
+        )
+
+    return _recommendation_status_payload(
+        status="ok",
+        message=None,
+        active_run=current_active_run,
+        ai_cfg=current_ai_cfg,
+        active_query_model_ready=True,
+    )
+
+
 def get_status(db: Session) -> dict[str, Any]:
     available = es_available()
     latest_or_running = get_running_run(db) or get_latest_run(db)
@@ -220,6 +399,13 @@ def get_status(db: Session) -> dict[str, Any]:
         active_indexed_documents=active_indexed_documents,
     )
     current_config_matches_active = active_run_usable and _config_matches_run(ai_cfg, active_run)
+    recommendations = get_recommendation_readiness(
+        db,
+        ai_cfg=ai_cfg,
+        active_run=active_run,
+        active_index_name=active_index_name,
+        active_indexed_documents=active_indexed_documents,
+    )
 
     return {
         "available": available,
@@ -231,6 +417,7 @@ def get_status(db: Session) -> dict[str, Any]:
         "current_config_matches_active": current_config_matches_active,
         "reindex_required": not active_run_usable or not current_config_matches_active,
         "legacy_indices": list_legacy_job_indices() if available else [],
+        "recommendations": recommendations,
     }
 
 
@@ -248,7 +435,7 @@ def queue_sync_run(
         raise SyncAlreadyRunningError("Embedding sync is already running")
 
     ai_cfg = get_ai_config(db)
-    embed_source, embed_model, embed_dims = _effective_embed_settings(ai_cfg)
+    embed_source, embed_model, embed_dims, embed_profile = _effective_embed_settings(ai_cfg)
     configured_dims = int(ai_cfg.get("embed_dims") or 0)
     if embed_source == "ollama" and configured_dims != embed_dims:
         log.info(
@@ -263,7 +450,7 @@ def queue_sync_run(
             embed_model=embed_model,
             embed_dims=embed_dims,
         )
-        embed_source, embed_model, embed_dims = _effective_embed_settings(ai_cfg)
+        embed_source, embed_model, embed_dims, embed_profile = _effective_embed_settings(ai_cfg)
 
     selected_jobs = _selected_jobs(db, unique_only)
     db_total_snapshot = int(db.query(JobRow).count())
@@ -301,6 +488,7 @@ def queue_sync_run(
         embed_source=embed_source,
         embed_model=embed_model,
         embed_dims=embed_dims,
+        embed_profile=embed_profile,
         db_total_snapshot=db_total_snapshot,
         selection_total=selection_total,
         target_total=target_total,
@@ -401,6 +589,11 @@ def run_sync_task(run_id: str) -> None:
             ai_config={
                 "embed_source": row.embed_source,
                 "embed_dims": row.embed_dims,
+                "embed_profile": resolve_run_embed_profile(
+                    row.embed_source,
+                    row.embed_model,
+                    getattr(row, "embed_profile", None),
+                ),
             },
         ):
             _update_run_progress(
@@ -446,34 +639,22 @@ def run_sync_task(run_id: str) -> None:
 def resolve_active_recommendation_source(db: Session) -> dict[str, Any]:
     ai_cfg = get_ai_config(db)
     active_run = get_active_run(db)
-    if not active_run:
-        return {
-            "status": "reindex_required",
-            "message": "No active embedding index. Run a full re-index first.",
-            "active_run": None,
-            "active_run_meta": None,
-            "active_index_name": None,
-            "config_matches_active": False,
-        }
-
-    active_index_name = active_run.index_alias or active_run.physical_index_name
+    active_index_name = active_run.index_alias or active_run.physical_index_name if active_run else None
     active_indexed_documents = count_documents(active_index_name) if active_index_name and es_available() else 0
-    if not _run_is_queryable(active_run, active_indexed_documents=active_indexed_documents):
-        return {
-            "status": "reindex_required",
-            "message": "The active embedding index is incomplete or empty. Run a full re-index.",
-            "active_run": active_run,
-            "active_run_meta": serialize_run(active_run),
-            "active_index_name": active_index_name,
-            "config_matches_active": False,
-        }
-
     current_config_matches_active = _config_matches_run(ai_cfg, active_run)
+    recommendations = get_recommendation_readiness(
+        db,
+        ai_cfg=ai_cfg,
+        active_run=active_run,
+        active_index_name=active_index_name,
+        active_indexed_documents=active_indexed_documents,
+    )
     return {
-        "status": "ok",
-        "message": None,
+        "status": recommendations["status"],
+        "message": recommendations["message"],
         "active_run": active_run,
         "active_run_meta": serialize_run(active_run),
         "active_index_name": active_index_name,
         "config_matches_active": current_config_matches_active,
+        "recommendations": recommendations,
     }

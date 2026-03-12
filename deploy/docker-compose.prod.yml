@@ -52,7 +52,7 @@ services:
   thin-llama:
     platform: ${THIN_LLAMA_PLATFORM:-linux/amd64}
     build:
-      context: ${THIN_LLAMA_BUILD_CONTEXT:-../../thin-llama}
+      context: ${THIN_LLAMA_BUILD_CONTEXT:-../thin-llama}
       dockerfile: Dockerfile
       args:
         VERSION: ${THIN_LLAMA_VERSION:-git}
@@ -62,13 +62,13 @@ services:
     volumes:
       - thin_llama_models:/models
       - thin_llama_state:/state
+    restart: unless-stopped
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8080/health >/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 12
       start_period: 20s
-    restart: unless-stopped
     networks:
       - jobseeker
 
@@ -76,7 +76,7 @@ services:
     image: curlimages/curl:8.8.0
     entrypoint: ["/bin/sh", "/thin-llama-init.sh"]
     environment:
-      - EMBED_MODEL=${EMBED_MODEL:-bge-base-en:v1.5}
+      - EMBED_MODEL=${EMBED_MODEL:-nomic-embed-text}
       - LLM_MODEL=${LLM_MODEL:-qwen2.5:7b}
     volumes:
       - ./scripts/thin-llama-init.sh:/thin-llama-init.sh:ro
@@ -102,9 +102,8 @@ services:
       - LLM_SUMMARIZE_TIMEOUT=90
       - ELASTICSEARCH_URL=http://elasticsearch:9200
       - ES_TIMEOUT=30
-      - EMBED_MODEL=${EMBED_MODEL:-bge-base-en:v1.5}
+      - EMBED_MODEL=${EMBED_MODEL:-nomic-embed-text}
       - EMBED_DIMS=${EMBED_DIMS:-768}
-      - EMBED_BULK_BATCH_SIZE=${EMBED_BULK_BATCH_SIZE:-16}
       - RAG_ENABLED=${RAG_ENABLED:-true}
       - CORS_ORIGINS=${CORS_ORIGINS:-*}
       - CELERY_BROKER_URL=redis://redis:6379/0
@@ -151,9 +150,8 @@ services:
       - LLM_SUMMARIZE_TIMEOUT=90
       - ELASTICSEARCH_URL=http://elasticsearch:9200
       - ES_TIMEOUT=30
-      - EMBED_MODEL=${EMBED_MODEL:-bge-base-en:v1.5}
+      - EMBED_MODEL=${EMBED_MODEL:-nomic-embed-text}
       - EMBED_DIMS=${EMBED_DIMS:-768}
-      - EMBED_BULK_BATCH_SIZE=${EMBED_BULK_BATCH_SIZE:-16}
       - RAG_ENABLED=${RAG_ENABLED:-true}
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0

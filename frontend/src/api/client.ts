@@ -11,12 +11,12 @@ import type {
   ResumeAnalyzeResult,
   ResumeRecommendation,
   ResumeRecommendationsResponse,
+  OllamaModel,
   AIConfig,
   AIConfigUpdate,
   AIMetrics,
   EmbeddingStatusResponse,
   EmbeddingSyncRun,
-  SelfHostedModel,
 } from "./types";
 import { getTokenForRequest } from "../auth/tokenProvider";
 
@@ -34,8 +34,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     let err: string;
     if (body?.error?.message) {
       err = body.error.message;
-    } else if (typeof body?.error === "string") {
-      err = body.error;
     } else if (Array.isArray(body?.detail)) {
       err =
         body.detail
@@ -359,13 +357,13 @@ export const api = {
       },
     ),
 
-  /** List available models. Pass provider to force self-hosted or OpenAI list. */
+  /** List available models. Pass provider to force ollama or openai list. */
   aiListModels: (provider?: string) =>
-    request<{ models: SelfHostedModel[] }>(
+    request<{ models: OllamaModel[] }>(
       provider ? `/ai/models?provider=${provider}` : "/ai/models",
     ),
 
-  /** Ensure a self-hosted model is available; pull if missing. */
+  /** Ensure Ollama model is available; pull if missing. */
   aiEnsureModel: (model: string) =>
     request<{ status: string; error?: string }>("/ai/ensure-model", {
       method: "POST",
@@ -465,46 +463,36 @@ export const api = {
     const decoder = new TextDecoder();
     let full = "";
     let recommendations: ResumeRecommendation[] = [];
-    let buffer = "";
-    const processLine = (rawLine: string) => {
-      const line = rawLine.trimEnd();
-      if (!line.startsWith("data: ")) return;
-      try {
-        const parsed = JSON.parse(line.slice(6)) as {
-          chunk?: string;
-          error?: string;
-          done?: boolean;
-          recommendations?: ResumeRecommendation[];
-        };
-        if (parsed.error) {
-          throw new Error(parsed.error);
-        }
-        if (typeof parsed.chunk === "string") {
-          full += parsed.chunk;
-          onChunk(parsed.chunk);
-        }
-        if (parsed.done && Array.isArray(parsed.recommendations)) {
-          recommendations = parsed.recommendations;
-        }
-      } catch (error) {
-        if (error instanceof SyntaxError) {
-          return;
-        }
-        throw error;
-      }
-    };
     while (true) {
       const { done, value } = await reader.read();
-      if (done) {
-        buffer += decoder.decode();
-        break;
+      if (done) break;
+      const text = decoder.decode(value, { stream: true });
+      const lines = text.split("\n");
+      for (const line of lines) {
+        if (line.startsWith("data: ")) {
+          try {
+            const parsed = JSON.parse(line.slice(6)) as {
+              chunk?: string;
+              error?: string;
+              done?: boolean;
+              recommendations?: ResumeRecommendation[];
+            };
+            if (parsed.error) {
+              throw new Error(parsed.error);
+            }
+            if (typeof parsed.chunk === "string") {
+              full += parsed.chunk;
+              onChunk(parsed.chunk);
+            }
+            if (parsed.done && Array.isArray(parsed.recommendations)) {
+              recommendations = parsed.recommendations;
+            }
+          } catch {
+            // ignore parse errors
+          }
+        }
       }
-      buffer += decoder.decode(value, { stream: true });
-      const lines = buffer.split("\n");
-      buffer = lines.pop() ?? "";
-      for (const line of lines) processLine(line);
     }
-    if (buffer) processLine(buffer);
     return { summary: full, recommendations };
   },
 };

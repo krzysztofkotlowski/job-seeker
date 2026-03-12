@@ -307,6 +307,91 @@ describe("ImportContent", () => {
     expect(screen.getByRole("button", { name: /Add missing jobs/i })).toBeDisabled();
   });
 
+  it("shows failed rebuild details when the old active index is no longer queryable", async () => {
+    vi.mocked(api.embeddingStatus).mockResolvedValue({
+      available: true,
+      current_db_total: 33931,
+      run: {
+        id: "run-failed",
+        status: "failed",
+        mode: "full",
+        unique_only: true,
+        embed_source: "ollama",
+        embed_model: "nomic-embed-text",
+        embed_dims: 768,
+        embed_profile: "nomic-search-v1",
+        db_total_snapshot: 33931,
+        selection_total: 11783,
+        target_total: 11783,
+        processed: 11783,
+        indexed: 0,
+        failed: 11783,
+        index_alias: "jobseeker_jobs_active",
+        physical_index_name: "jobseeker_jobs_run_failed",
+        celery_task_id: "celery-failed",
+        error_message:
+          "Embedding sync incomplete: indexed=0 failed=11783 target_total=11783",
+        started_at: null,
+        finished_at: null,
+        updated_at: null,
+        activated_at: null,
+      },
+      active_run: {
+        id: "run-old",
+        status: "completed",
+        mode: "full",
+        unique_only: true,
+        embed_source: "ollama",
+        embed_model: "nomic-embed-text",
+        embed_dims: 768,
+        embed_profile: "nomic-legacy-v1",
+        db_total_snapshot: 33931,
+        selection_total: 11783,
+        target_total: 11783,
+        processed: 11783,
+        indexed: 11783,
+        failed: 0,
+        index_alias: "jobseeker_jobs_active",
+        physical_index_name: "jobseeker_jobs_run_old",
+        celery_task_id: "celery-old",
+        error_message: null,
+        started_at: null,
+        finished_at: null,
+        updated_at: null,
+        activated_at: "2026-03-12T07:58:36Z",
+      },
+      active_index_name: "jobseeker_jobs_active",
+      active_indexed_documents: 11783,
+      current_config_matches_active: false,
+      reindex_required: true,
+      legacy_indices: ["jobseeker_jobs", "jobseeker_jobs_384"],
+      recommendations: {
+        status: "reindex_required",
+        message:
+          "The active embedding index still uses the legacy raw-text nomic profile, but the current configuration uses prefix-correct nomic search embeddings. Run a full rebuild to activate the new index.",
+        active_embed_model: "nomic-embed-text",
+        active_embed_dims: 768,
+        active_embed_profile: "nomic-legacy-v1",
+        selected_embed_model: "nomic-embed-text",
+        selected_embed_dims: 768,
+        selected_embed_profile: "nomic-search-v1",
+        active_query_model_ready: false,
+      },
+    });
+
+    render(<ImportContent />);
+
+    expect(
+      await screen.findByText(/Embedding sync incomplete: indexed=0 failed=11783 target_total=11783/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/legacy raw-text nomic profile/i),
+    ).toBeInTheDocument();
+    expect(
+      screen.queryByText(/Recommendations are currently using an older active index/i),
+    ).not.toBeInTheDocument();
+  });
+
   it("disables the duplicate checkbox while a run is queued", async () => {
     vi.mocked(api.embeddingStatus).mockResolvedValue({
       available: true,

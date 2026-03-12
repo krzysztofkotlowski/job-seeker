@@ -400,6 +400,70 @@ def test_embedding_status_marks_zero_doc_failed_active_run_as_reindex_required(c
     assert data["reindex_required"] is True
 
 
+def test_embedding_status_exposes_recommendation_readiness_for_stale_active_model(client: TestClient, db):
+    """embedding-status should expose legacy nomic profile mismatch explicitly."""
+    from datetime import datetime, timezone
+    from uuid import uuid4
+
+    from app.models.tables import AIConfigRow, EmbeddingSyncRunRow
+
+    db.query(EmbeddingSyncRunRow).delete(synchronize_session=False)
+    db.query(AIConfigRow).delete(synchronize_session=False)
+    db.commit()
+
+    db.add(
+        AIConfigRow(
+            id=1,
+            provider="ollama",
+            embed_source="ollama",
+            llm_model="qwen2.5:7b",
+            embed_model="nomic-embed-text",
+            embed_dims=768,
+            embed_profile="nomic-search-v1",
+            temperature=0.3,
+            max_output_tokens=1024,
+        )
+    )
+    run = EmbeddingSyncRunRow(
+        id=uuid4(),
+        status="completed",
+        mode="full",
+        unique_only=True,
+        embed_source="ollama",
+        embed_model="nomic-embed-text",
+        embed_dims=768,
+        db_total_snapshot=11783,
+        selection_total=11783,
+        target_total=11783,
+        processed=11783,
+        indexed=11783,
+        failed=0,
+        index_alias="jobseeker_jobs_active",
+        physical_index_name="jobseeker_jobs_run_old",
+        started_at=datetime.now(timezone.utc),
+        finished_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        activated_at=datetime.now(timezone.utc),
+    )
+    db.add(run)
+    db.commit()
+
+    with (
+        patch("app.services.embedding_sync_service.es_available", return_value=True),
+        patch("app.services.embedding_sync_service.list_legacy_job_indices", return_value=[]),
+        patch("app.services.embedding_sync_service.count_documents", return_value=11783),
+    ):
+        r = client.get("/api/v1/jobs/embedding-status")
+
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["recommendations"]["status"] == "reindex_required"
+    assert "legacy raw-text nomic profile" in data["recommendations"]["message"]
+    assert data["recommendations"]["selected_embed_model"] == "nomic-embed-text"
+    assert data["recommendations"]["active_embed_profile"] == "nomic-legacy-v1"
+    assert data["recommendations"]["selected_embed_profile"] == "nomic-search-v1"
+
+
 def test_enrich_batch_missing_ids(client: TestClient):
     r = client.post("/api/v1/jobs/enrich")
     assert r.status_code == 400

@@ -1,4 +1,4 @@
-"""AI config service: load/save config from DB, list self-hosted/OpenAI models."""
+"""AI config service: load/save config from DB, list Ollama/OpenAI models."""
 
 import logging
 import os
@@ -7,18 +7,12 @@ import httpx
 from sqlalchemy.orm import Session
 
 from app.models.tables import AIConfigRow
-from app.services.embedding_service import get_ollama_embedding_dims
-from app.services.self_hosted_runtime_service import (
-    best_effort_activate_self_hosted_models as runtime_best_effort_activate_self_hosted_models,
-    ensure_self_hosted_model,
-    is_self_hosted_model_ready,
-    list_self_hosted_models,
-)
 
 log = logging.getLogger(__name__)
 
-DEFAULT_LLM_MODEL = os.environ.get("LLM_MODEL", "qwen2.5:7b") or "qwen2.5:7b"
-DEFAULT_EMBED_MODEL = os.environ.get("EMBED_MODEL", "bge-base-en:v1.5") or "bge-base-en:v1.5"
+OLLAMA_URL = (os.environ.get("LLM_URL", "") or "").rstrip("/")
+DEFAULT_LLM_MODEL = os.environ.get("LLM_MODEL", "phi3:mini") or "phi3:mini"
+DEFAULT_EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text") or "nomic-embed-text"
 DEFAULT_MAX_TOKENS = int(os.environ.get("LLM_MAX_OUTPUT_TOKENS", "2048") or "2048")
 OPENAI_EMBED_DIMS = 1536
 OLLAMA_EMBED_DIMS = int(os.environ.get("EMBED_DIMS", "768") or "768")
@@ -33,49 +27,15 @@ OPENAI_LLM_MODELS = [
 OPENAI_EMBED_MODEL = "text-embedding-3-small"
 
 
-def _best_effort_activate_self_hosted_models(chat_model: str | None = None, embed_model: str | None = None) -> None:
-    """Best-effort activate downloaded self-hosted models when supported."""
-    runtime_best_effort_activate_self_hosted_models(
-        chat_model=chat_model,
-        embed_model=embed_model,
-    )
-
-
-def _clamp_embed_dims(embed_dims: int) -> int:
-    """Clamp embed dims to sane range accepted by current schema/UI."""
-    return max(256, min(4096, int(embed_dims)))
-
-
-def resolve_embed_dims(embed_source: str | None, embed_dims: int | None) -> int:
-    """
-    Resolve active embedding dimensions for index/query operations.
-    OpenAI embeddings are fixed in-app to text-embedding-3-small (1536 dims).
-    """
-    source = (embed_source or "ollama").strip().lower()
-    if source == "openai":
-        return OPENAI_EMBED_DIMS
-    if embed_dims is None:
-        return OLLAMA_EMBED_DIMS
-    return _clamp_embed_dims(embed_dims)
-
-
-def resolve_ollama_embed_dims(embed_model: str | None, fallback_dims: int | None = None) -> int:
-    """Resolve self-hosted embedding dims, preferring runtime metadata over live probing."""
-    detected = get_ollama_embedding_dims(embed_model)
-    if isinstance(detected, int) and detected > 0:
-        return detected
-    if isinstance(fallback_dims, int) and fallback_dims > 0:
-        return _clamp_embed_dims(fallback_dims)
-    return OLLAMA_EMBED_DIMS
-
-
 def get_ai_config(db: Session) -> dict:
     """Return current AI config from DB or env defaults. Never returns api_key."""
     row = db.query(AIConfigRow).filter(AIConfigRow.id == 1).first()
     if row:
         provider = getattr(row, "provider", None) or "ollama"
         embed_source = getattr(row, "embed_source", None) or "ollama"
-        embed_dims = resolve_embed_dims(embed_source, getattr(row, "embed_dims", None))
+        embed_dims = getattr(row, "embed_dims", None)
+        if embed_dims is None:
+            embed_dims = OPENAI_EMBED_DIMS if embed_source == "openai" else OLLAMA_EMBED_DIMS
         return {
             "provider": provider,
             "openai_llm_model": getattr(row, "openai_llm_model", None) or "gpt-4o-mini",
@@ -121,21 +81,13 @@ def update_ai_config(
         row = AIConfigRow(
             id=1,
             provider="ollama",
-            embed_source="ollama",
             llm_model=DEFAULT_LLM_MODEL,
             embed_model=DEFAULT_EMBED_MODEL,
             temperature=0.3,
             max_output_tokens=DEFAULT_MAX_TOKENS,
-            embed_dims=OLLAMA_EMBED_DIMS,
         )
         db.add(row)
         db.flush()
-
-    previous_provider = (getattr(row, "provider", None) or "ollama").strip().lower()
-    previous_embed_source = (getattr(row, "embed_source", None) or "ollama").strip().lower()
-    previous_llm_model = (getattr(row, "llm_model", None) or DEFAULT_LLM_MODEL).strip() or DEFAULT_LLM_MODEL
-    previous_embed_model = (getattr(row, "embed_model", None) or DEFAULT_EMBED_MODEL).strip() or DEFAULT_EMBED_MODEL
-    effective_embed_source = previous_embed_source
 
     if provider is not None:
         p = provider.strip().lower()
@@ -152,7 +104,6 @@ def update_ai_config(
         es = embed_source.strip().lower()
         if es in ("ollama", "openai"):
             row.embed_source = es
-            effective_embed_source = es
     if llm_model is not None:
         row.llm_model = llm_model.strip() or DEFAULT_LLM_MODEL
     if embed_model is not None:
@@ -161,49 +112,11 @@ def update_ai_config(
         row.temperature = max(0.0, min(1.0, float(temperature)))
     if max_output_tokens is not None:
         row.max_output_tokens = max(512, min(4096, int(max_output_tokens)))
-    if effective_embed_source == "openai":
-        # Keep dimensions aligned with active OpenAI embedding model in this app.
-        row.embed_dims = OPENAI_EMBED_DIMS
-    elif effective_embed_source == "ollama":
-        previous_was_ollama = previous_embed_source == "ollama"
-        fallback_dims = (
-            embed_dims
-            if embed_dims is not None
-            else getattr(row, "embed_dims", None) if previous_was_ollama else OLLAMA_EMBED_DIMS
-        )
-        desired_dims = resolve_ollama_embed_dims(
-            row.embed_model,
-            fallback_dims,
-        )
-        row.embed_dims = desired_dims
-    elif embed_dims is not None:
-        row.embed_dims = _clamp_embed_dims(embed_dims)
-    elif row.embed_dims is None:
-        row.embed_dims = OLLAMA_EMBED_DIMS
+    if embed_dims is not None:
+        row.embed_dims = max(256, min(4096, int(embed_dims)))
 
     db.commit()
     db.refresh(row)
-    chat_model_to_activate = None
-    if row.provider == "ollama":
-        chat_model = (row.llm_model or DEFAULT_LLM_MODEL).strip() or DEFAULT_LLM_MODEL
-        if previous_provider != "ollama" or previous_llm_model != chat_model or not is_self_hosted_model_ready(chat_model):
-            chat_model_to_activate = chat_model
-
-    embed_model_to_activate = None
-    if row.embed_source == "ollama":
-        active_embed_model = (row.embed_model or DEFAULT_EMBED_MODEL).strip() or DEFAULT_EMBED_MODEL
-        if (
-            previous_embed_source != "ollama"
-            or previous_embed_model != active_embed_model
-            or not is_self_hosted_model_ready(active_embed_model)
-        ):
-            embed_model_to_activate = active_embed_model
-
-    if chat_model_to_activate or embed_model_to_activate:
-        _best_effort_activate_self_hosted_models(
-            chat_model=chat_model_to_activate,
-            embed_model=embed_model_to_activate,
-        )
     return get_ai_config(db)
 
 
@@ -224,14 +137,21 @@ def validate_openai_key(api_key: str) -> bool:
         return False
 
 
-def ensure_ollama_model(model: str) -> dict:
-    """Ensure a self-hosted model is available; pull if missing."""
-    return ensure_self_hosted_model(model)
-
-
 def list_ollama_models() -> dict:
-    """Fetch self-hosted models, preferring thin-llama catalog and falling back to installed tags."""
-    return list_self_hosted_models()
+    """Fetch available models from Ollama /api/tags. Returns { models: [...] }."""
+    if not OLLAMA_URL:
+        return {"models": []}
+    try:
+        with httpx.Client(timeout=10) as client:
+            resp = client.get(f"{OLLAMA_URL}/api/tags")
+            if resp.status_code != 200:
+                return {"models": []}
+            data = resp.json()
+            models = data.get("models") or []
+            return {"models": models}
+    except Exception as e:
+        log.debug("Failed to list Ollama models: %s", e)
+        return {"models": []}
 
 
 def list_openai_models() -> dict:

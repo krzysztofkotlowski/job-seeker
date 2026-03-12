@@ -2,32 +2,31 @@
 
 AI job-intelligence platform for sourcing jobs, indexing them for semantic retrieval, analyzing resumes, and generating actionable career guidance.
 
-This project combines a React frontend, FastAPI backend, PostgreSQL, Elasticsearch, Redis, Celery, and a self-hosted/OpenAI model layer into one end-to-end system. It ingests real job data from Polish IT job boards, normalizes and deduplicates listings, builds a managed vector index for recommendations, and lets a user move from raw job aggregation to AI-assisted resume analysis inside one product.
+**Related project:** [thin-llama](https://github.com/krzysztofkotlowski/thin-llama) — self-hosted llama.cpp runtime with an Ollama-compatible API, used by this app for local chat and embeddings.
 
-From a portfolio perspective, this is not a UI-only app or an isolated AI demo. It shows full ownership of product delivery across ingestion, async pipelines, search infrastructure, AI integration, production deployment, and frontend UX.
+---
 
-## What This Demonstrates
+## Screenshots
 
-- AI-assisted resume analysis with local or hosted model providers
-- Hybrid retrieval using keyword matching plus Elasticsearch dense-vector search
-- Persistent background indexing and scraping workflows with Redis + Celery
-- Active vector-index management for stable recommendations after model changes
-- Full-stack product ownership: frontend, backend, data model, infrastructure, CI, and deployment
-- Self-hosted production deployment with Docker Compose on Ubuntu Server
+![Jobs view](assets/job-seeker-jobs-view.png)
 
-## Key Capabilities
+![Skills view](assets/job-seeker-skills-view.png)
 
-- Aggregate jobs from JustJoin.it and NoFluffJobs into a unified dataset
-- Filter, group duplicates, inspect details, and track application state
-- Upload a PDF resume and extract skills matched against imported jobs
-- Generate hybrid recommendations from the active semantic index
-- Produce AI summaries and career guidance with `thin-llama` or OpenAI
-- Configure LLM and embedding providers from the UI
-- Run persistent embedding sync with tracked progress and active-index cutover
-- Explore skills, salary trends, and dashboard analytics
-- Enable optional Keycloak auth for protected operations
+## Demo Videos
 
-## Architecture Overview
+| Demo | Video |
+|------|-------|
+| Dashboard | [job-seeker-dashboard.mp4](assets/job-seeker-dashboard.mp4) |
+| Resume analysis | [job-seeker-resume-view.mp4](assets/job-seeker-resume-view.mp4) |
+| Settings / AI config | [job-seeker-settings.mp4](assets/job-seeker-settings.mp4) |
+
+Videos are 3× sped up. To regenerate from `.mov` sources, run `./assets/convert-videos.sh` (requires [ffmpeg](https://ffmpeg.org/)).
+
+---
+
+## Architecture
+
+### System overview
 
 ```mermaid
 flowchart TB
@@ -52,16 +51,7 @@ flowchart TB
     API -->|"import jobs"| Sources
 ```
 
-### Core design
-
-- `FastAPI` owns the REST API, resume analysis flow, AI configuration, and health/operational endpoints.
-- `PostgreSQL` stores the canonical job and application data.
-- `Elasticsearch` stores the active dense-vector recommendation index and powers semantic retrieval.
-- `Redis + Celery` run background import and embedding-sync work outside the request path.
-- `thin-llama` provides the default self-hosted `llama.cpp` runtime, while `OpenAI` can be used from the same UI configuration layer.
-- The frontend is a single-page React app focused on job exploration, resume analysis, import operations, and AI settings.
-
-### Recommendation / RAG flow
+### RAG / recommendation flow
 
 ```mermaid
 flowchart LR
@@ -82,20 +72,44 @@ flowchart LR
     Merge --> Summary
 ```
 
-The recommendation pipeline uses the currently activated embedding run rather than guessing index shape from config. That keeps semantic search stable when embedding models or dimensions change and makes full rebuilds explicit.
+### thin-llama integration
+
+`thin-llama` acts as the AI runtime for both chat (resume summaries, career guidance) and embeddings (RAG). It exposes an Ollama-compatible API, so the backend uses the same client for local and hosted providers. Production deployment fetches `thin-llama` from a pinned Git ref on the server.
+
+---
+
+## Project Description
+
+Job Seeker Tracker combines a React frontend, FastAPI backend, PostgreSQL, Elasticsearch, Redis, Celery, and a self-hosted/OpenAI model layer into one end-to-end system. It ingests real job data from Polish IT job boards, normalizes and deduplicates listings, builds a managed vector index for recommendations, and lets a user move from raw job aggregation to AI-assisted resume analysis inside one product.
+
+From a portfolio perspective, this is not a UI-only app or an isolated AI demo. It shows full ownership of product delivery across ingestion, async pipelines, search infrastructure, AI integration, production deployment, and frontend UX.
 
 ## Tech Stack
 
 | Layer    | Stack                                                         |
 | -------- | ------------------------------------------------------------- |
 | Frontend | React 19, TypeScript, Vite 7, MUI 7, React Router 7, Recharts |
-| Backend  | FastAPI, SQLAlchemy 2, Pydantic 2, PyPDF, SlowAPI             |
+| Backend  | FastAPI, SQLAlchemy 2, Pydantic 2, PyPDF, SlowAPI              |
 | Data     | PostgreSQL 16, Elasticsearch 8                                |
 | Async    | Celery 5, Redis 7                                             |
-| AI       | thin-llama, OpenAI, local embeddings via `bge-base-en:v1.5` by default |
+| AI       | thin-llama, OpenAI, local embeddings via `nomic-embed-text` by default |
 | Infra    | Docker Compose, Nginx frontend container, GitHub Actions CI   |
 
-## Local Quick Start
+## Key Capabilities
+
+- Aggregate jobs from JustJoin.it and NoFluffJobs into a unified dataset
+- Filter, group duplicates, inspect details, and track application state
+- Upload a PDF resume and extract skills matched against imported jobs
+- Generate hybrid recommendations from the active semantic index
+- Produce AI summaries and career guidance with thin-llama or OpenAI
+- Configure LLM and embedding providers from the UI
+- Run persistent embedding sync with tracked progress and active-index cutover
+- Explore skills, salary trends, and dashboard analytics
+- Enable optional Keycloak auth for protected operations
+
+---
+
+## Quick Start
 
 ### Docker Compose
 
@@ -109,16 +123,13 @@ App endpoints:
 - Backend API: [http://localhost:8000](http://localhost:8000)
 - OpenAPI docs: [http://localhost:8000/api/v1/docs](http://localhost:8000/api/v1/docs)
 
-The local stack includes:
+The local stack includes: postgres, redis, elasticsearch, thin-llama, thin-llama-init, backend, worker, frontend.
 
-- `postgres`
-- `redis`
-- `elasticsearch`
-- `thin-llama`
-- `thin-llama-init`
-- `backend`
-- `worker`
-- `frontend`
+Bootstrap the self-hosted runtime manually if needed:
+
+```bash
+docker compose run --rm thin-llama-init
+```
 
 Optional auth:
 
@@ -149,99 +160,20 @@ npm run dev
 
 The frontend proxies `/api` to the backend through Vite during development.
 
-## AI / RAG Workflow
-
-### Default local AI setup
-
-- Summary model: `qwen2.5:7b`
-- Embedding model: `bge-base-en:v1.5`
-- Vector dimensions: `768`
-
-Bootstrap the self-hosted runtime manually if needed:
-
-```bash
-docker compose run --rm thin-llama-init
-```
-
-### Resume analysis path
-
-1. Import jobs from supported sources
-2. Run embedding sync to build the active semantic index
-3. Upload a PDF resume
-4. Extract skills and keyword matches
-5. Query the active vector index for semantic recommendations
-6. Generate an AI summary from the matched job context
-
-### Important implementation details
-
-- Embedding sync is tracked persistently, not only in browser state
-- The app distinguishes between the latest completed run and the active recommendation index
-- Incremental indexing is allowed only when embedding settings match the active index
-- Recommendations continue to use the active run metadata until a full rebuild activates a new index
+---
 
 ## Deployment
 
 Production deployment is documented in [deploy/README.md](deploy/README.md).
 
-Common paths:
+The production stack uses [deploy/docker-compose.prod.yml](deploy/docker-compose.prod.yml) and includes thin-llama (fetched from Git on the server), thin-llama-init model bootstrap, PostgreSQL, Redis, Elasticsearch, FastAPI backend, Celery worker, and frontend on port 80.
 
 ```bash
 ./deploy/scripts/deploy.sh <user>@<server>
 ./deploy/scripts/test-and-deploy-app-only.sh <user>@<server>
 ```
 
-The production stack uses [deploy/docker-compose.prod.yml](deploy/docker-compose.prod.yml) and includes:
-
-- PostgreSQL
-- Redis
-- Elasticsearch
-- `thin-llama`
-- `thin-llama-init` model bootstrap
-- FastAPI backend
-- Celery worker
-- Frontend served on port `80`
-
-`thin-llama` is treated as an external dependency: deploy scripts fetch it from a pinned Git ref on the server before building the runtime image.
-
-Use the root README for product and setup orientation. Use the deploy README for server preparation, env configuration, and operational commands.
-
-## Testing and CI
-
-### Local test commands
-
-Backend:
-
-```bash
-cd backend
-pytest
-```
-
-Frontend:
-
-```bash
-cd frontend
-npm test -- --run
-npm run lint
-npm run build
-```
-
-Convenience pipeline:
-
-```bash
-./scripts/test-and-build.sh
-```
-
-### CI
-
-GitHub Actions runs:
-
-- backend lint with Ruff
-- backend tests with PostgreSQL service
-- frontend lint
-- frontend tests
-- frontend production build
-
-See [.github/workflows/ci.yml](.github/workflows/ci.yml).
+---
 
 ## Project Structure
 
@@ -266,6 +198,10 @@ job-seeker/
 │   ├── docker-compose.prod.yml
 │   ├── scripts/
 │   └── README.md
+├── assets/
+│   ├── *.png              # screenshots
+│   ├── *.mp4              # demo videos (run convert-videos.sh to generate)
+│   └── convert-videos.sh  # ffmpeg script for video conversion
 ├── docs/
 │   ├── KEYCLOAK_SETUP.md
 │   ├── TESTING_PLAN.md
@@ -274,16 +210,40 @@ job-seeker/
 └── scripts/
 ```
 
+---
+
 ## Notes on Tradeoffs
 
-- thin-llama-first defaults make the project self-hostable and cheap to run, but model quality and latency depend on local hardware.
-- Elasticsearch vector search keeps retrieval infrastructure explicit and inspectable, at the cost of managing index lifecycle and rebuilds.
-- Celery + Redis add operational complexity, but they keep imports and embedding sync out of the request path and make long-running jobs reliable.
+- **thin-llama vs Ollama:** thin-llama is a minimal Go-based control plane for llama.cpp; Ollama offers more features but adds complexity. thin-llama keeps the stack self-hostable and lightweight.
+- **Self-hosted vs OpenAI:** thin-llama-first defaults make the project cheap to run, but model quality and latency depend on local hardware. OpenAI can be configured from the same UI for higher quality when needed.
+- **Elasticsearch vector search** keeps retrieval infrastructure explicit and inspectable, at the cost of managing index lifecycle and rebuilds.
+- **Celery + Redis** add operational complexity, but keep imports and embedding sync out of the request path and make long-running jobs reliable.
 - The product is currently specialized around Polish IT sources, but the ingestion architecture is adapter-based rather than hard-coded to one board.
 
-## Roadmap
+---
 
-- Add more job source adapters with the same normalization pipeline
-- Extend resume history and user-specific recommendation persistence
-- Improve observability around import and embedding-job throughput
-- Add richer ranking explanations for recommendation results
+## Testing and CI
+
+Backend:
+
+```bash
+cd backend
+pytest
+```
+
+Frontend:
+
+```bash
+cd frontend
+npm test -- --run
+npm run lint
+npm run build
+```
+
+Convenience pipeline:
+
+```bash
+./scripts/test-and-build.sh
+```
+
+GitHub Actions runs backend lint/tests, frontend lint/tests, and production build. See [.github/workflows/ci.yml](.github/workflows/ci.yml).

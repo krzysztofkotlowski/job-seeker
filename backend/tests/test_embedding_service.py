@@ -3,6 +3,11 @@
 from unittest.mock import MagicMock, patch
 
 from app.services import embedding_service
+from app.services.embedding_profiles import (
+    BGE_QUERY_PREFIX,
+    NOMIC_DOCUMENT_PREFIX,
+    NOMIC_QUERY_PREFIX,
+)
 
 
 def test_embed_text_returns_none_when_disabled():
@@ -68,7 +73,7 @@ def test_embed_text_prefixes_bge_query_inputs():
         )
 
     posted = mock_client.post.call_args.kwargs["json"]
-    assert posted["input"].startswith(embedding_service.BGE_QUERY_PREFIX)
+    assert posted["input"].startswith(BGE_QUERY_PREFIX)
     assert posted["input"].endswith("distributed systems")
 
 
@@ -94,8 +99,8 @@ def test_embed_batch_returns_list():
     assert len(result[0]) == 768
 
 
-def test_embed_batch_keeps_bge_document_inputs_raw():
-    """Document indexing should not add the BGE query prefix."""
+def test_embed_batch_prefixes_nomic_document_inputs():
+    """Prefix-correct nomic indexing should use the document prefix."""
     mock_resp = MagicMock()
     mock_resp.status_code = 200
     mock_resp.raise_for_status = MagicMock()
@@ -113,13 +118,44 @@ def test_embed_batch_keeps_bge_document_inputs_raw():
 
         embedding_service.embed_batch(
             ["python backend", "distributed systems"],
-            model="bge-base-en:v1.5",
-            ai_config={"embed_source": "ollama"},
+            model="nomic-embed-text",
+            ai_config={"embed_source": "ollama", "embed_profile": "nomic-search-v1"},
             usage="document",
         )
 
     posted = mock_client.post.call_args.kwargs["json"]
-    assert posted["input"] == ["python backend", "distributed systems"]
+    assert posted["input"] == [
+        f"{NOMIC_DOCUMENT_PREFIX}python backend",
+        f"{NOMIC_DOCUMENT_PREFIX}distributed systems",
+    ]
+
+
+def test_embed_text_prefixes_nomic_query_inputs():
+    """Prefix-correct nomic queries should use the query prefix."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {"embeddings": [[0.1] * 768]}
+
+    with (
+        patch.object(embedding_service, "EMBED_URL", "http://ollama:11434"),
+        patch.object(embedding_service, "httpx") as mock_httpx,
+    ):
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.post.return_value = mock_resp
+        mock_httpx.Client.return_value = mock_client
+
+        embedding_service.embed_text(
+            "python backend",
+            model="nomic-embed-text",
+            ai_config={"embed_source": "ollama", "embed_profile": "nomic-search-v1"},
+            usage="query",
+        )
+
+    posted = mock_client.post.call_args.kwargs["json"]
+    assert posted["input"] == f"{NOMIC_QUERY_PREFIX}python backend"
 
 
 def test_embed_batch_returns_empty_when_no_url():
@@ -203,3 +239,19 @@ def test_get_ollama_embedding_dims_falls_back_to_probe_when_catalog_metadata_mis
     ) as embed_text:
         assert embedding_service.get_ollama_embedding_dims("custom-embed") == 768
     embed_text.assert_called_once()
+
+
+def test_embed_documents_individually_retries_failed_items():
+    with patch.object(
+        embedding_service,
+        "embed_text",
+        side_effect=[None, [0.1] * 768, [0.2] * 768],
+    ) as embed_text:
+        result = embedding_service.embed_documents_individually(
+            ["first", "second"],
+            model="nomic-embed-text",
+            ai_config={"embed_source": "ollama", "embed_profile": "nomic-search-v1"},
+        )
+
+    assert result == [[0.1] * 768, [0.2] * 768]
+    assert embed_text.call_count == 3

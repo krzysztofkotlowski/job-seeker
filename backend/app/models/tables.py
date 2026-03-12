@@ -139,7 +139,8 @@ class AIConfigRow(Base):
     openai_llm_model = Column(String(100), nullable=False, default="gpt-4o-mini")
     embed_source = Column(String(20), nullable=False, default="ollama")
     llm_model = Column(String(255), nullable=False, default="qwen2.5:7b")
-    embed_model = Column(String(255), nullable=False, default="bge-base-en:v1.5")
+    embed_model = Column(String(255), nullable=False, default="nomic-embed-text")
+    embed_profile = Column(String(50), nullable=True)
     temperature = Column(Float, nullable=False, default=0.3)
     max_output_tokens = Column(Integer, nullable=False, default=1024)
     embed_dims = Column(Integer, nullable=True)
@@ -205,6 +206,7 @@ class EmbeddingSyncRunRow(Base):
     embed_source = Column(String(20), nullable=False, default="ollama")
     embed_model = Column(String(255), nullable=False)
     embed_dims = Column(Integer, nullable=False)
+    embed_profile = Column(String(50), nullable=True)
 
     db_total_snapshot = Column(Integer, nullable=False, default=0)
     selection_total = Column(Integer, nullable=False, default=0)

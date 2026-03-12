@@ -22,7 +22,7 @@ ES_TIMEOUT = int(os.environ.get("ES_TIMEOUT", "30"))
 JOBS_INDEX = "jobseeker_jobs"
 JOBS_INDEX_ALIAS = f"{JOBS_INDEX}_active"
 MANAGED_INDEX_PREFIX = f"{JOBS_INDEX}_run"
-BULK_BATCH_SIZE = int(os.environ.get("EMBED_BULK_BATCH_SIZE", "8"))
+BULK_BATCH_SIZE = int(os.environ.get("EMBED_BULK_BATCH_SIZE", "48"))
 ES_BULK_CHUNK_SIZE = int(os.environ.get("ES_BULK_CHUNK_SIZE", "500"))
 ES_INDEX_REPLICAS = int(os.environ.get("ES_INDEX_REPLICAS", "0"))
 
@@ -358,7 +358,7 @@ def index_job(
         return False
     text = _job_to_text(job)
     if embedding is None:
-        embedding = embed_text(text, model=embed_model, ai_config=ai_config, usage="document")
+        embedding = embed_text(text, model=embed_model, ai_config=ai_config)
     if not embedding or len(embedding) != embed_dims:
         return False
     index_name = _index_for_dims(embed_dims)
@@ -395,7 +395,7 @@ def bulk_index_jobs_with_progress(
     for i in range(0, total, BULK_BATCH_SIZE):
         batch = jobs[i : i + BULK_BATCH_SIZE]
         texts = [_job_to_text(j) for j in batch]
-        embeddings = embed_batch(texts, model=embed_model, ai_config=ai_config, usage="document")
+        embeddings = embed_batch(texts, model=embed_model, ai_config=ai_config)
         if len(embeddings) != len(batch):
             log.warning("Embedding count mismatch: got %d, expected %d", len(embeddings), len(batch))
             embeddings = embeddings[: len(batch)]
@@ -478,7 +478,7 @@ def iter_index_job_batches(
     for i in range(0, total, BULK_BATCH_SIZE):
         batch = jobs[i : i + BULK_BATCH_SIZE]
         texts = [_job_to_text(j) for j in batch]
-        embeddings = embed_batch(texts, model=embed_model, ai_config=ai_config, usage="document")
+        embeddings = embed_batch(texts, model=embed_model, ai_config=ai_config)
         aligned_embeddings = list(embeddings[: len(batch)])
         if len(aligned_embeddings) < len(batch):
             aligned_embeddings.extend([None] * (len(batch) - len(aligned_embeddings)))
@@ -547,7 +547,7 @@ def search_keyword(
         if not hits:
             log.debug("Keyword search returned no hits (index=%s, query_len=%d)", target_index, len(query_text.strip()))
         out = []
-        for idx, h in enumerate(hits, start=1):
+        for h in hits:
             src = h.get("_source", {})
             score = h.get("_score", 0)
             out.append({
@@ -557,9 +557,6 @@ def search_keyword(
                 "url": src.get("url", ""),
                 "category": src.get("category", ""),
                 "score": float(score),
-                "keyword_score": float(score),
-                "keyword_rank": idx,
-                "sources": {"keyword": True, "semantic": False},
             })
         return out
     except Exception as e:
@@ -609,14 +606,6 @@ def _merge_rrf(
         if doc:
             doc = dict(doc)
             doc["score"] = rrf_score
-            doc["keyword_score"] = doc_a.get(jid, {}).get("keyword_score")
-            doc["semantic_score"] = doc_b.get(jid, {}).get("semantic_score")
-            doc["keyword_rank"] = rank_a.get(jid)
-            doc["semantic_rank"] = rank_b.get(jid)
-            doc["sources"] = {
-                "keyword": jid in rank_a,
-                "semantic": jid in rank_b,
-            }
             scored.append((rrf_score, doc))
 
     scored.sort(key=lambda x: -x[0])
@@ -652,7 +641,7 @@ def search_similar(
         if not hits:
             log.debug("kNN search returned no hits (index=%s, embedding_dims=%d)", target_index, len(query_embedding))
         out = []
-        for idx, h in enumerate(hits, start=1):
+        for h in hits:
             src = h.get("_source", {})
             score = h.get("_score", 0)
             out.append({
@@ -662,9 +651,6 @@ def search_similar(
                 "url": src.get("url", ""),
                 "category": src.get("category", ""),
                 "score": float(score),
-                "semantic_score": float(score),
-                "semantic_rank": idx,
-                "sources": {"keyword": False, "semantic": True},
             })
         return out
     except Exception as e:

@@ -6,7 +6,11 @@ import pytest
 from sqlalchemy.orm import sessionmaker
 
 from app.models.tables import EmbeddingSyncRunRow, JobRow
-from app.services.embedding_sync_service import resolve_active_recommendation_source, run_sync_task
+from app.services.embedding_sync_service import (
+    get_status,
+    resolve_active_recommendation_source,
+    run_sync_task,
+)
 
 
 def _job() -> JobRow:
@@ -129,3 +133,45 @@ def test_resolve_active_recommendation_source_rejects_empty_active_run(db):
 
     assert resolved["status"] == "reindex_required"
     assert "incomplete or empty" in resolved["message"]
+
+
+def test_status_and_recommendation_source_report_unqueryable_stale_active_model(db):
+    """A legacy nomic index should force rebuild when the selected profile changes."""
+    stale_run = _run(
+        status="completed",
+        mode="full",
+        embed_model="nomic-embed-text",
+        embed_dims=768,
+        indexed=11783,
+        failed=0,
+        target_total=11783,
+        physical_index_name="jobseeker_jobs_run_stale",
+        activated=True,
+    )
+    db.add(stale_run)
+    db.commit()
+
+    with (
+        patch("app.services.embedding_sync_service.es_available", return_value=True),
+        patch("app.services.embedding_sync_service.count_documents", return_value=11783),
+        patch(
+            "app.services.embedding_sync_service.get_ai_config",
+            return_value={
+                "embed_source": "ollama",
+                "embed_model": "nomic-embed-text",
+                "embed_dims": 768,
+                "embed_profile": "nomic-search-v1",
+            },
+        ),
+    ):
+        status = get_status(db)
+        resolved = resolve_active_recommendation_source(db)
+
+    assert status["recommendations"]["status"] == "reindex_required"
+    assert "legacy raw-text nomic profile" in status["recommendations"]["message"]
+    assert status["recommendations"]["active_query_model_ready"] is False
+    assert status["recommendations"]["active_embed_profile"] == "nomic-legacy-v1"
+    assert status["recommendations"]["selected_embed_profile"] == "nomic-search-v1"
+
+    assert resolved["status"] == "reindex_required"
+    assert resolved["message"] == status["recommendations"]["message"]

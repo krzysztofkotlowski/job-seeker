@@ -15,7 +15,6 @@ log = logging.getLogger(__name__)
 RAG_ENABLED = os.environ.get("RAG_ENABLED", "false").lower() in ("1", "true", "yes")
 
 DEFAULT_MATCH_LIMIT = 100
-MAX_MISSING_SKILLS = 5
 
 
 def _normalize(s: str) -> str:
@@ -37,164 +36,17 @@ def _keyword_fallback_hits(
         return []
     hits = search_keyword(query_text=query_text, top_k=top_k, index_name=index_name)
     if hits:
-        normalized_hits = []
-        for idx, hit in enumerate(hits, start=1):
-            item = dict(hit)
-            item.setdefault("keyword_score", item.get("score"))
-            item.setdefault("keyword_rank", idx)
-            item["sources"] = {
-                "keyword": True,
-                "semantic": bool((item.get("sources") or {}).get("semantic")),
-            }
-            normalized_hits.append(item)
         log.info(
             "Resume recommendations: keyword fallback hits=%d (index=%s)",
-            len(normalized_hits),
+            len(hits),
             index_name,
         )
-        return normalized_hits
     return hits
 
 
-def _dedupe_skills(skills: list[str]) -> list[str]:
-    out: list[str] = []
-    seen: set[str] = set()
-    for skill in skills:
-        norm = _normalize(skill)
-        if not norm or norm in seen:
-            continue
-        seen.add(norm)
-        out.append(skill)
-    return out
-
-
-def _job_skills_from_row(row: JobRow | None, job_dict: dict | None = None) -> tuple[list[str], list[str]]:
-    if row is not None:
-        return list(row.skills_required or []), list(row.skills_nice_to_have or [])
-    if not job_dict:
-        return [], []
-    return list(job_dict.get("skills_required") or []), list(job_dict.get("skills_nice_to_have") or [])
-
-
-def _category_match_lookup(db: Session, extracted_skills: set[str]) -> dict[str, dict]:
-    if not extracted_skills:
-        return {}
-    return {
-        _normalize(item.get("category") or ""): item
-        for item in build_by_category(db, extracted_skills)
-        if item.get("category")
-    }
-
-
-def _recommendation_sources(hit: dict) -> dict[str, bool]:
-    src = hit.get("sources") or {}
-    keyword = bool(
-        src.get("keyword")
-        or hit.get("keyword_rank") is not None
-        or hit.get("keyword_score") is not None
-    )
-    semantic = bool(
-        src.get("semantic")
-        or hit.get("semantic_rank") is not None
-        or hit.get("semantic_score") is not None
-    )
-    return {"keyword": keyword, "semantic": semantic}
-
-
-def _recommendation_reason(sources: dict[str, bool]) -> str:
-    if sources.get("keyword") and sources.get("semantic"):
-        return "hybrid_match"
-    if sources.get("semantic"):
-        return "semantic_match"
-    return "keyword_match"
-
-
-def _recommendation_summary(
-    *,
-    matched_skills: list[str],
-    missing_skills: list[str],
-    category_overlap: dict | None,
-    sources: dict[str, bool],
-) -> str:
-    if matched_skills:
-        lead = f"Matched {len(matched_skills)} resume skill{'s' if len(matched_skills) != 1 else ''}"
-    elif sources.get("semantic"):
-        lead = "Strong semantic similarity to your resume skill profile"
-    else:
-        lead = "Relevant keyword overlap with your resume profile"
-
-    if sources.get("keyword") and sources.get("semantic"):
-        lead += " through both skill overlap and semantic retrieval"
-    elif sources.get("semantic") and not matched_skills:
-        lead += " based on embedding similarity"
-
-    parts = [lead]
-    if category_overlap and category_overlap.get("match_score") is not None:
-        parts.append(
-            f"category fit: {category_overlap.get('category')} {int(category_overlap['match_score'])}/100"
-        )
-    if missing_skills:
-        parts.append(f"top gaps: {', '.join(missing_skills[:2])}")
-    return ". ".join(parts) + "."
-
-
-def _build_recommendation_explanation(
-    *,
-    row: JobRow | None,
-    job_dict: dict,
-    hit: dict,
-    extracted_skills: set[str],
-    category_lookup: dict[str, dict],
-) -> dict:
-    required_skills, nice_skills = _job_skills_from_row(row, job_dict)
-    extracted_lower = {_normalize(skill) for skill in extracted_skills if skill}
-
-    matched_required = [skill for skill in _dedupe_skills(required_skills) if _normalize(skill) in extracted_lower]
-    matched_nice = [skill for skill in _dedupe_skills(nice_skills) if _normalize(skill) in extracted_lower]
-    matched_skills = _dedupe_skills(matched_required + matched_nice)
-
-    missing_required = [skill for skill in _dedupe_skills(required_skills) if _normalize(skill) not in extracted_lower]
-    missing_nice = [skill for skill in _dedupe_skills(nice_skills) if _normalize(skill) not in extracted_lower]
-    missing_skills = (missing_required + missing_nice)[:MAX_MISSING_SKILLS]
-
-    job_category = _normalize((job_dict.get("category") or "").strip())
-    category_entry = category_lookup.get(job_category)
-    category_overlap = None
-    if category_entry:
-        category_overlap = {
-            "category": category_entry.get("category"),
-            "match_score": category_entry.get("match_score"),
-        }
-
-    sources = _recommendation_sources(hit)
-    return {
-        "summary": _recommendation_summary(
-            matched_skills=matched_skills,
-            missing_skills=missing_skills,
-            category_overlap=category_overlap,
-            sources=sources,
-        ),
-        "matched_skills": matched_skills,
-        "missing_skills": missing_skills,
-        "category_overlap": category_overlap,
-        "sources": sources,
-        "keyword_rank": hit.get("keyword_rank"),
-        "semantic_rank": hit.get("semantic_rank"),
-        "retrieval_reason": _recommendation_reason(sources),
-    }
-
-
-def _hydrate_hits_to_jobs(
-    db: Session,
-    hits: list[dict],
-    *,
-    extracted_skills: set[str] | None = None,
-    category_lookup: dict[str, dict] | None = None,
-) -> list[dict]:
+def _hydrate_hits_to_jobs(db: Session, hits: list[dict]) -> list[dict]:
     """Resolve Elasticsearch hits back to DB jobs, falling back to source fields when missing."""
     results: list[dict] = []
-    extracted = extracted_skills or set()
-    category_map = category_lookup or {}
     for h in hits:
         job_id = h.get("job_id")
         if not job_id:
@@ -213,29 +65,15 @@ def _hydrate_hits_to_jobs(
                 "company": h.get("company", ""),
                 "url": h.get("url", ""),
                 "category": h.get("category", ""),
-                "skills_required": [],
-                "skills_nice_to_have": [],
             }
-        results.append(
-            {
-                "job": job_dict,
-                "score": float(h.get("score", 0)),
-                "explanation": _build_recommendation_explanation(
-                    row=row,
-                    job_dict=job_dict,
-                    hit=h,
-                    extracted_skills=extracted,
-                    category_lookup=category_map,
-                ),
-            }
-        )
+        results.append({"job": job_dict, "score": float(h.get("score", 0))})
     return results
 
 
 def _active_embedding_context(db: Session, ai_config: dict | None = None) -> dict:
     """Resolve the active managed recommendation source and whether it is queryable."""
     try:
-        from app.services.embedding_service import is_ollama_model_ready
+        from app.services.embedding_service import is_ollama_model_available
         from app.services.embedding_sync_service import resolve_active_recommendation_source
     except ImportError:
         return {
@@ -274,12 +112,12 @@ def _active_embedding_context(db: Session, ai_config: dict | None = None) -> dic
         resolved["embed_model"] = active_run.embed_model
         return resolved
 
-    if not is_ollama_model_ready(active_run.embed_model):
+    if not is_ollama_model_available(active_run.embed_model):
         resolved.update(
             {
                 "status": "active_embedding_unavailable",
                 "message": (
-                    f"The active embedding model '{active_run.embed_model}' is not ready in thin-llama."
+                    f"The active embedding model '{active_run.embed_model}' is not available in Ollama."
                 ),
             }
         )
@@ -451,7 +289,6 @@ def retrieve_semantic_matches(
         query_text,
         model=resolved.get("embed_model") or embed_model,
         ai_config=resolved.get("embed_ai_config"),
-        usage="query",
     )
     if not embedding:
         return []
@@ -535,7 +372,6 @@ def retrieve_hybrid_recommendations_response(
             "active_run": None,
             "config_matches_active": False,
         }
-    category_lookup = _category_match_lookup(db, extracted_skills)
 
     resolved = _active_embedding_context(db, ai_config=ai_config)
     active_run = resolved.get("active_run")
@@ -564,12 +400,7 @@ def retrieve_hybrid_recommendations_response(
             return {
                 "status": "fallback",
                 "message": resolved.get("message"),
-                "recommendations": _hydrate_hits_to_jobs(
-                    db,
-                    fallback_hits,
-                    extracted_skills=extracted_skills,
-                    category_lookup=category_lookup,
-                ),
+                "recommendations": _hydrate_hits_to_jobs(db, fallback_hits),
                 "active_run": active_run_meta,
                 "config_matches_active": bool(resolved.get("config_matches_active")),
             }
@@ -585,7 +416,6 @@ def retrieve_hybrid_recommendations_response(
         query_text,
         model=resolved.get("embed_model") or embed_model,
         ai_config=resolved.get("embed_ai_config"),
-        usage="query",
     )
     if not embedding:
         log.warning("Resume recommendations: query embedding failed for active index %s", active_index_name)
@@ -598,12 +428,7 @@ def retrieve_hybrid_recommendations_response(
             return {
                 "status": "fallback",
                 "message": "Embedding query failed; using keyword fallback on the active index.",
-                "recommendations": _hydrate_hits_to_jobs(
-                    db,
-                    fallback_hits,
-                    extracted_skills=extracted_skills,
-                    category_lookup=category_lookup,
-                ),
+                "recommendations": _hydrate_hits_to_jobs(db, fallback_hits),
                 "active_run": active_run_meta,
                 "config_matches_active": bool(resolved.get("config_matches_active")),
             }
@@ -634,12 +459,7 @@ def retrieve_hybrid_recommendations_response(
             return {
                 "status": "fallback",
                 "message": "Active embedding dimensions do not match the query model; using keyword fallback on the active index.",
-                "recommendations": _hydrate_hits_to_jobs(
-                    db,
-                    fallback_hits,
-                    extracted_skills=extracted_skills,
-                    category_lookup=category_lookup,
-                ),
+                "recommendations": _hydrate_hits_to_jobs(db, fallback_hits),
                 "active_run": active_run_meta,
                 "config_matches_active": bool(resolved.get("config_matches_active")),
             }
@@ -672,12 +492,7 @@ def retrieve_hybrid_recommendations_response(
             return {
                 "status": "fallback",
                 "message": "Hybrid search returned no vector hits; using keyword fallback on the active index.",
-                "recommendations": _hydrate_hits_to_jobs(
-                    db,
-                    fallback_hits,
-                    extracted_skills=extracted_skills,
-                    category_lookup=category_lookup,
-                ),
+                "recommendations": _hydrate_hits_to_jobs(db, fallback_hits),
                 "active_run": active_run_meta,
                 "config_matches_active": bool(resolved.get("config_matches_active")),
             }
@@ -696,12 +511,7 @@ def retrieve_hybrid_recommendations_response(
                 "config_matches_active": bool(resolved.get("config_matches_active")),
             }
 
-    results = _hydrate_hits_to_jobs(
-        db,
-        hits,
-        extracted_skills=extracted_skills,
-        category_lookup=category_lookup,
-    )
+    results = _hydrate_hits_to_jobs(db, hits)
     log.info("Resume recommendations: hits=%d, kept=%d", len(hits), len(results))
     return {
         "status": "ok",

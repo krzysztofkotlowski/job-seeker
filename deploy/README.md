@@ -72,12 +72,14 @@ Open `http://<server-ip>` in your browser. The frontend serves on port 80 and pr
 |----------|-------------|---------|
 | `POSTGRES_PASSWORD` | PostgreSQL password | `jobseeker` |
 | `LLM_MODEL` | Self-hosted chat model for resume summaries | `qwen2.5:7b` |
-| `EMBED_MODEL` | Self-hosted embedding model for RAG | `bge-base-en:v1.5` |
+| `EMBED_MODEL` | Self-hosted embedding model for RAG | `nomic-embed-text` |
+| `EMBED_DIMS` | Embedding vector dimensions (must match model) | `768` |
+| `EMBED_PROFILE` | Self-hosted embedding preprocessing profile | `nomic-search-v1` |
 | `EMBED_BULK_BATCH_SIZE` | Self-hosted embedding batch size during indexing | `16` |
 | `LLM_MAX_OUTPUT_TOKENS` | Max tokens for AI output | `400` |
 | `RAG_ENABLED` | Enable semantic search | `true` |
 | `THIN_LLAMA_GIT_URL` | Git source for the self-hosted runtime | `https://github.com/krzysztofkotlowski/thin-llama.git` |
-| `THIN_LLAMA_GIT_REF` | Pinned tag or commit to deploy | `fb1dfe4234a49e9da248635b8d5be1dabfe3be10` |
+| `THIN_LLAMA_GIT_REF` | Pinned tag or commit to deploy | (see deploy/env.example.prod) |
 | `KEYCLOAK_ENABLED` | Enable Keycloak auth | `false` |
 | `CORS_ORIGINS` | Allowed origins (`*` for same-origin) | `*` |
 
@@ -110,7 +112,7 @@ The script dumps the local DB, copies it to the server, restores it, and cleans 
 
 ## thin-llama bootstrap
 
-The stack no longer runs an Ollama container. Instead, `thin-llama` is the only self-hosted inference runtime.
+The stack uses `thin-llama` as the only self-hosted inference runtime (Ollama is not used). thin-llama is a minimal Go-based control plane for llama.cpp with an Ollama-compatible API; it keeps the stack lightweight and self-hostable compared to running full Ollama.
 
 The `thin-llama-init` one-shot service automatically:
 

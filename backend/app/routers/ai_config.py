@@ -42,6 +42,7 @@ class AIConfigUpdate(BaseModel):
     embed_source: str | None = Field(None, pattern="^(ollama|openai)$")
     llm_model: str | None = Field(None, min_length=1, max_length=255)
     embed_model: str | None = Field(None, min_length=1, max_length=255)
+    embed_profile: str | None = Field(None, min_length=1, max_length=50)
     temperature: float | None = Field(None, ge=0.0, le=1.0)
     max_output_tokens: int | None = Field(None, ge=512, le=4096)
 
@@ -109,6 +110,7 @@ def put_config(
         embed_source=body.embed_source,
         llm_model=body.llm_model,
         embed_model=body.embed_model,
+        embed_profile=body.embed_profile,
         temperature=body.temperature,
         max_output_tokens=body.max_output_tokens,
     )

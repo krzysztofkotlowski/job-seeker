@@ -5,6 +5,10 @@ import os
 
 import httpx
 
+from app.services.embedding_profiles import (
+    prepare_embedding_input,
+    resolve_selected_embed_profile,
+)
 from app.services.self_hosted_runtime_service import (
     get_self_hosted_embedding_dims,
     is_self_hosted_model_available,
@@ -14,39 +18,20 @@ from app.services.self_hosted_runtime_service import (
 log = logging.getLogger(__name__)
 
 EMBED_URL = os.environ.get("LLM_URL", "").rstrip("/")
-EMBED_MODEL = os.environ.get("EMBED_MODEL", "bge-base-en:v1.5")
+EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text")
 EMBED_TIMEOUT = int(os.environ.get("EMBED_TIMEOUT", "120"))
+SELF_HOSTED_DOCUMENT_RETRIES = int(
+    os.environ.get("SELF_HOSTED_DOCUMENT_EMBED_RETRIES", "2")
+)
 
-# bge-base-en:v1.5: 768 dims; text-embedding-3-small: 1536 dims
+# nomic-embed-text and bge-base-en:v1.5 both use 768 dims here; text-embedding-3-small is 1536.
 EMBED_DIMS = int(os.environ.get("EMBED_DIMS", "768"))
 OPENAI_EMBED_MODEL = "text-embedding-3-small"
 OPENAI_EMBED_DIMS = 1536
-BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
 
 
 def _clean_text(value: str | None) -> str:
     return str(value or "").strip()
-
-
-def _is_bge_embedding_model(model: str | None) -> bool:
-    normalized = _clean_text(model).lower()
-    return "bge" in normalized
-
-
-def _prepare_embedding_input(
-    text: str,
-    *,
-    model: str | None,
-    ai_config: dict | None,
-    usage: str,
-) -> str:
-    cleaned = _clean_text(text)
-    if not cleaned:
-        return ""
-    source = _clean_text((ai_config or {}).get("embed_source")).lower() or "ollama"
-    if source != "openai" and usage == "query" and _is_bge_embedding_model(model):
-        return f"{BGE_QUERY_PREFIX}{cleaned}"
-    return cleaned
 
 
 def embed_text_openai(text: str, model: str | None = None, api_key: str | None = None) -> list[float] | None:
@@ -125,7 +110,10 @@ def get_ollama_embedding_dims(model: str | None) -> int | None:
     vec = embed_text(
         "dimension probe",
         model=requested,
-        ai_config={"embed_source": "ollama"},
+        ai_config={
+            "embed_source": "ollama",
+            "embed_profile": resolve_selected_embed_profile("ollama", requested),
+        },
         usage="document",
     )
     if not vec:
@@ -156,10 +144,11 @@ def embed_text(
     if not EMBED_URL:
         return None
     effective_model = (model or "").strip() or EMBED_MODEL
-    prepared = _prepare_embedding_input(
+    prepared = prepare_embedding_input(
         text,
-        model=effective_model,
-        ai_config=ai_config,
+        embed_source=(ai_config or {}).get("embed_source"),
+        embed_model=effective_model,
+        embed_profile=(ai_config or {}).get("embed_profile"),
         usage=usage,
     )
     if not prepared:
@@ -207,10 +196,11 @@ def embed_batch(
         prepared[:8000]
         for text in texts
         if (
-            prepared := _prepare_embedding_input(
+            prepared := prepare_embedding_input(
                 text,
-                model=effective_model,
-                ai_config=ai_config,
+                embed_source=(ai_config or {}).get("embed_source"),
+                embed_model=effective_model,
+                embed_profile=(ai_config or {}).get("embed_profile"),
                 usage=usage,
             )
         )
@@ -233,3 +223,31 @@ def embed_batch(
     except Exception as e:
         log.warning("Self-hosted batch embedding failed: %s", e)
     return []
+
+
+def embed_documents_individually(
+    texts: list[str],
+    model: str | None = None,
+    ai_config: dict | None = None,
+    *,
+    usage: str = "document",
+) -> list[list[float] | None]:
+    """Embed one document per self-hosted request to avoid oversized batched inputs."""
+    if not texts:
+        return []
+
+    attempts = max(1, SELF_HOSTED_DOCUMENT_RETRIES + 1)
+    results: list[list[float] | None] = []
+    for text in texts:
+        vector: list[float] | None = None
+        for _ in range(attempts):
+            vector = embed_text(
+                text,
+                model=model,
+                ai_config=ai_config,
+                usage=usage,
+            )
+            if vector:
+                break
+        results.append(vector)
+    return results

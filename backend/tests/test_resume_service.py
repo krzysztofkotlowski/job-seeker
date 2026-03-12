@@ -13,6 +13,7 @@ if "elasticsearch" not in sys.modules:
 from app.services.resume_service import (
     match_jobs_to_skills,
     merge_keyword_and_semantic_matches,
+    retrieve_hybrid_recommendations_response,
     retrieve_hybrid_recommendations,
     retrieve_semantic_matches,
 )
@@ -22,8 +23,9 @@ def _create_active_run(
     db,
     *,
     embed_source: str = "ollama",
-    embed_model: str = "all-minilm",
+    embed_model: str = "nomic-embed-text",
     embed_dims: int = 768,
+    embed_profile: str | None = "nomic-search-v1",
 ):
     from datetime import datetime, timezone
     from uuid import uuid4
@@ -38,6 +40,7 @@ def _create_active_run(
         embed_source=embed_source,
         embed_model=embed_model,
         embed_dims=embed_dims,
+        embed_profile=embed_profile,
         db_total_snapshot=1,
         selection_total=1,
         target_total=1,
@@ -193,8 +196,8 @@ def test_retrieve_semantic_matches_returns_matches(db):
     assert mock_search.call_args.kwargs["index_name"] == "jobseeker_jobs_active"
 
 
-def test_retrieve_hybrid_recommendations_keyword_fallback_on_dims_mismatch(db):
-    """Falls back to keyword search on the active managed index when dims mismatch."""
+def test_retrieve_hybrid_recommendations_dims_mismatch_requires_rebuild(db):
+    """A query-shape mismatch should force a rebuild instead of pretending the active vectors still fit."""
     from app.models.tables import JobRow
     from uuid import uuid4
 
@@ -218,6 +221,8 @@ def test_retrieve_hybrid_recommendations_keyword_fallback_on_dims_mismatch(db):
 
     import app.services.elasticsearch_service as es_mod
     import app.services.embedding_service as embed_mod
+    import app.services.resume_service as resume_mod
+    import app.services.embedding_sync_service as sync_mod
 
     with (
         patch.object(embed_mod, "embed_text", return_value=[0.1] * 1536),
@@ -225,36 +230,38 @@ def test_retrieve_hybrid_recommendations_keyword_fallback_on_dims_mismatch(db):
         patch.object(es_mod, "is_available", return_value=True),
         patch.object(es_mod, "search_hybrid", return_value=[]),
         patch.object(
-            es_mod,
-            "search_keyword",
-            return_value=[
-                {
-                    "job_id": str(job_id),
-                    "title": "Python Engineer",
-                    "company": "Acme",
-                    "url": job_url,
-                    "category": "Backend",
-                    "score": 0.7,
-                }
-            ],
+            resume_mod,
+            "_keyword_fallback_hits",
+            return_value=[],
         ) as mock_keyword,
+        patch.object(
+            sync_mod,
+            "get_ai_config",
+            return_value={
+                "embed_source": "ollama",
+                "embed_model": "nomic-embed-text",
+                "embed_dims": 768,
+                "embed_profile": "nomic-search-v1",
+            },
+        ),
+        patch.object(sync_mod, "es_available", return_value=True),
+        patch.object(sync_mod, "count_documents", return_value=1),
     ):
-        result = retrieve_hybrid_recommendations(
+        response = retrieve_hybrid_recommendations_response(
             db,
             {"Python"},
             top_k=5,
-            ai_config={"embed_source": "openai", "embed_dims": 768},
+            ai_config={
+                "embed_source": "ollama",
+                "embed_model": "nomic-embed-text",
+                "embed_dims": 768,
+                "embed_profile": "nomic-search-v1",
+            },
         )
 
-    assert len(result) == 1
-    assert result[0]["job"]["title"] == "Python Engineer"
-    assert result[0]["job"]["id"] == str(job_id)
-    assert result[0]["score"] == pytest.approx(0.7)
-    assert result[0]["explanation"]["sources"] == {"keyword": True, "semantic": False}
-    assert result[0]["explanation"]["retrieval_reason"] == "keyword_match"
-    assert result[0]["explanation"]["missing_skills"][:2] == ["Kafka", "AWS"]
-    assert mock_keyword.call_count == 1
-    assert mock_keyword.call_args.kwargs["index_name"] == "jobseeker_jobs_active"
+    assert response["status"] == "reindex_required"
+    assert response["recommendations"] == []
+    assert "Run a full rebuild" in response["message"]
 
 
 def test_retrieve_hybrid_recommendations_keyword_fallback_when_embedding_fails(db):
@@ -281,14 +288,15 @@ def test_retrieve_hybrid_recommendations_keyword_fallback_when_embedding_fails(d
 
     import app.services.elasticsearch_service as es_mod
     import app.services.embedding_service as embed_mod
+    import app.services.resume_service as resume_mod
 
     with (
         patch.object(embed_mod, "embed_text", return_value=None),
         patch.object(embed_mod, "is_ollama_model_ready", return_value=True),
         patch.object(es_mod, "is_available", return_value=True),
         patch.object(
-            es_mod,
-            "search_keyword",
+            resume_mod,
+            "_keyword_fallback_hits",
             return_value=[
                 {
                     "job_id": str(job_id),
@@ -300,24 +308,77 @@ def test_retrieve_hybrid_recommendations_keyword_fallback_when_embedding_fails(d
                 }
             ],
         ) as mock_keyword,
+        patch("app.services.embedding_sync_service.es_available", return_value=True),
+        patch("app.services.embedding_sync_service.count_documents", return_value=1),
     ):
         result = retrieve_hybrid_recommendations(
             db,
             {"Python"},
             top_k=5,
-            ai_config={"embed_source": "ollama", "embed_dims": 768},
+            ai_config={
+                "embed_source": "ollama",
+                "embed_model": "nomic-embed-text",
+                "embed_dims": 768,
+                "embed_profile": "nomic-search-v1",
+            },
         )
 
     assert len(result) == 1
     assert result[0]["job"]["title"] == "Platform Engineer"
     assert result[0]["job"]["id"] == str(job_id)
     assert result[0]["score"] == pytest.approx(0.61)
-    assert mock_keyword.call_count == 1
+    mock_keyword.assert_called_once()
     assert mock_keyword.call_args.kwargs["index_name"] == "jobseeker_jobs_active"
 
 
-def test_retrieve_hybrid_recommendations_uses_active_run_metadata_when_config_changes(db):
-    """Recommendations should query with active-run dims/index, not current config dims."""
+def test_retrieve_hybrid_recommendations_blocks_when_active_model_is_unqueryable(db):
+    """Do not keyword-fallback when the active run uses legacy nomic embeddings."""
+    _create_active_run(
+        db,
+        embed_model="nomic-embed-text",
+        embed_dims=768,
+        embed_profile=None,
+    )
+
+    import app.services.elasticsearch_service as es_mod
+    import app.services.embedding_sync_service as sync_mod
+
+    with (
+        patch.object(es_mod, "is_available", return_value=True),
+        patch.object(es_mod, "search_keyword") as mock_keyword,
+        patch.object(
+            sync_mod,
+            "get_ai_config",
+            return_value={
+                "embed_source": "ollama",
+                "embed_model": "nomic-embed-text",
+                "embed_dims": 768,
+                "embed_profile": "nomic-search-v1",
+            },
+        ),
+        patch.object(sync_mod, "count_documents", return_value=1),
+        patch.object(sync_mod, "es_available", return_value=True),
+    ):
+        response = retrieve_hybrid_recommendations_response(
+            db,
+            {"Python"},
+            top_k=5,
+            ai_config={
+                "embed_source": "ollama",
+                "embed_model": "nomic-embed-text",
+                "embed_dims": 768,
+                "embed_profile": "nomic-search-v1",
+            },
+        )
+
+    assert response["status"] == "reindex_required"
+    assert response["recommendations"] == []
+    assert "legacy raw-text nomic profile" in response["message"]
+    mock_keyword.assert_not_called()
+
+
+def test_retrieve_hybrid_recommendations_requires_rebuild_when_config_changes(db):
+    """Recommendations should block when the selected embedding config no longer matches the active run."""
     from app.models.tables import JobRow
     from uuid import uuid4
 
@@ -340,6 +401,7 @@ def test_retrieve_hybrid_recommendations_uses_active_run_metadata_when_config_ch
 
     import app.services.elasticsearch_service as es_mod
     import app.services.embedding_service as embed_mod
+    import app.services.embedding_sync_service as sync_mod
 
     with (
         patch.object(embed_mod, "embed_text", return_value=[0.1] * 768),
@@ -359,21 +421,30 @@ def test_retrieve_hybrid_recommendations_uses_active_run_metadata_when_config_ch
                 }
             ],
         ) as mock_hybrid,
-        patch("app.services.embedding_sync_service.es_available", return_value=True),
-        patch("app.services.embedding_sync_service.count_documents", return_value=1),
+        patch.object(
+            sync_mod,
+            "get_ai_config",
+            return_value={
+                "embed_source": "ollama",
+                "embed_model": "all-minilm",
+                "embed_dims": 384,
+                "embed_profile": "raw-v1",
+            },
+        ),
+        patch.object(sync_mod, "es_available", return_value=True),
+        patch.object(sync_mod, "count_documents", return_value=1),
     ):
-        result = retrieve_hybrid_recommendations(
+        response = retrieve_hybrid_recommendations_response(
             db,
             {"Python"},
             top_k=5,
             ai_config={"embed_source": "ollama", "embed_model": "all-minilm", "embed_dims": 384},
         )
 
-    assert len(result) == 1
-    assert result[0]["job"]["title"] == "Data Platform Engineer"
-    assert result[0]["score"] == pytest.approx(0.88)
-    assert mock_hybrid.call_args.kwargs["embed_dims"] == 768
-    assert mock_hybrid.call_args.kwargs["index_name"] == "jobseeker_jobs_active"
+    assert response["status"] == "reindex_required"
+    assert response["recommendations"] == []
+    assert "current embedding configuration uses 'all-minilm' (raw-v1)" in response["message"]
+    mock_hybrid.assert_not_called()
 
 
 def test_retrieve_hybrid_recommendations_includes_explanation_for_hybrid_hits(db):
@@ -433,7 +504,12 @@ def test_retrieve_hybrid_recommendations_includes_explanation_for_hybrid_hits(db
             db,
             {"Python", "Docker"},
             top_k=5,
-            ai_config={"embed_source": "ollama", "embed_model": "all-minilm", "embed_dims": 768},
+            ai_config={
+                "embed_source": "ollama",
+                "embed_model": "nomic-embed-text",
+                "embed_dims": 768,
+                "embed_profile": "nomic-search-v1",
+            },
         )
 
     assert len(result) == 1

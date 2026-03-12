@@ -12,13 +12,12 @@ from sqlalchemy.orm import Session
 
 from app.auth import get_current_user_optional, require_auth
 from app.database import get_db
-from app.models.resume import ResumeRecommendationsRequest, ResumeSummarizeRequest
+from app.models.resume import ResumeSummarizeRequest
 from app.services.ai_config_service import get_ai_config
 from app.services.inference_log_service import log_inference
 from app.services.user_service import get_or_create_user
 from app.models.tables import ResumeRow, UserRow
 from app.services.llm_service import (
-    LLMRequestError,
     OpenAIStreamError,
     summarize_resume_match,
     summarize_resume_match_stream,
@@ -28,7 +27,6 @@ from app.services.resume_service import (
     build_by_category,
     match_jobs_to_skills,
     merge_keyword_and_semantic_matches,
-    retrieve_hybrid_recommendations_response,
     retrieve_semantic_matches,
     RAG_ENABLED,
 )
@@ -78,17 +76,16 @@ async def analyze_resume(
     Upload a resume PDF. Extracts keywords/skills from the text and returns job matches.
     """
     try:
+        if not file.filename:
+            raise HTTPException(400, "No file name")
         content = await file.read()
         if not content:
             raise HTTPException(400, "File is empty")
         if len(content) > MAX_FILE_SIZE:
             raise HTTPException(400, f"File too large (max {MAX_FILE_SIZE // (1024*1024)} MB)")
 
-        filename = file.filename or ""
-        content_type = (file.content_type or "").lower()
-        # Mobile browsers may send empty filename or "blob"; accept when Content-Type is PDF
-        is_pdf = filename.lower().endswith(".pdf") or "pdf" in content_type
-        if not is_pdf:
+        filename_lower = (file.filename or "").lower()
+        if not filename_lower.endswith(".pdf"):
             raise HTTPException(400, "Only PDF files are supported.")
 
         try:
@@ -164,41 +161,6 @@ async def analyze_resume(
         raise HTTPException(500, f"Resume analysis failed: {e!s}")
 
 
-@router.post("/recommendations")
-async def get_recommendations(
-    body: ResumeRecommendationsRequest = Body(...),
-    db: Session = Depends(get_db),
-):
-    """
-    Fetch hybrid search (RAG) recommendations for extracted skills.
-    Returns job recommendations with relevance scores. Requires RAG enabled and embeddings synced.
-    """
-    ai_cfg = get_ai_config(db)
-    embed_model = ai_cfg["embed_model"] if ai_cfg.get("embed_source") != "openai" else None
-    response = retrieve_hybrid_recommendations_response(
-        db,
-        set(body.extracted_skills or []),
-        top_k=10,
-        embed_model=embed_model,
-        ai_config=ai_cfg,
-    )
-    log.info(
-        "Recommendations response: status=%s count=%d active_run=%s skills_count=%d",
-        response.get("status"),
-        len(response.get("recommendations") or []),
-        (response.get("active_run") or {}).get("id"),
-        len(body.extracted_skills or []),
-    )
-    if not response.get("recommendations"):
-        log.info(
-            "Recommendations empty: status=%s active_run=%s skills_count=%d",
-            response.get("status"),
-            (response.get("active_run") or {}).get("id"),
-            len(body.extracted_skills or []),
-        )
-    return response
-
-
 @router.post("/summarize")
 async def summarize_match(
     body: ResumeSummarizeRequest = Body(...),
@@ -229,18 +191,14 @@ async def summarize_match(
             max_tokens=ai_cfg["max_output_tokens"],
             temperature=ai_cfg["temperature"],
         )
-    except (LLMRequestError, OpenAIStreamError) as e:
-        raise HTTPException(503, str(e)) from e
+    except OpenAIStreamError as e:
+        raise HTTPException(503, str(e))
     latency_ms = int((time.perf_counter() - start) * 1000)
 
     if summary is None:
         msg = (
             "AI summary unavailable. "
-            + (
-                "Check your OpenAI API key and model."
-                if ai_cfg.get("provider") == "openai"
-                else "Ensure your self-hosted runtime is running and the selected chat model is available."
-            )
+            + ("Check your OpenAI API key and model." if ai_cfg.get("provider") == "openai" else "Ensure Ollama is running with a model (e.g. ollama pull phi3:mini).")
         )
         raise HTTPException(503, msg)
 
@@ -293,8 +251,8 @@ async def summarize_match_stream(
             max_tokens=ai_cfg["max_output_tokens"],
             temperature=ai_cfg["temperature"],
         ):
-            # event is {"chunk": "text"} or {"error": "message"} — send as-is
-            yield f"data: {json.dumps(event)}\n\n"
+            payload = json.dumps(event)
+            yield f"data: {payload}\n\n"
 
     return StreamingResponse(
         generate(),

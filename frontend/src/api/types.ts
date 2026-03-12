@@ -205,6 +205,7 @@ export interface EmbeddingSyncRun {
   embed_source: "ollama" | "openai";
   embed_model: string;
   embed_dims: number;
+  embed_profile?: string | null;
   db_total_snapshot: number;
   selection_total: number;
   target_total: number;
@@ -231,6 +232,17 @@ export interface EmbeddingStatusResponse {
   current_config_matches_active: boolean;
   reindex_required: boolean;
   legacy_indices: string[];
+  recommendations?: {
+    status: ResumeRecommendationStatus;
+    message: string | null;
+    active_embed_model: string | null;
+    active_embed_dims: number;
+    active_embed_profile?: string | null;
+    selected_embed_model: string | null;
+    selected_embed_dims: number;
+    selected_embed_profile?: string | null;
+    active_query_model_ready: boolean;
+  };
 }
 
 export type ResumeRecommendationStatus =
@@ -297,6 +309,7 @@ export interface AIConfig {
   api_key_set: boolean;
   llm_model: string;
   embed_model: string;
+  embed_profile?: string;
   temperature: number;
   max_output_tokens: number;
   embed_dims?: number;

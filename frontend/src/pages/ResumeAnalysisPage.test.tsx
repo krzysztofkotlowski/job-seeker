@@ -700,6 +700,107 @@ describe("ResumeAnalysisPage", () => {
     );
   });
 
+  it("shows the stale active-model message when the old vector index is not queryable", async () => {
+    vi.mocked(api.embeddingStatus).mockResolvedValue({
+      available: true,
+      current_db_total: 100,
+      run: {
+        id: "run-failed",
+        status: "failed",
+        mode: "full",
+        unique_only: true,
+        embed_source: "ollama",
+        embed_model: "nomic-embed-text",
+        embed_dims: 768,
+        embed_profile: "nomic-search-v1",
+        db_total_snapshot: 100,
+        selection_total: 50,
+        target_total: 50,
+        processed: 50,
+        indexed: 0,
+        failed: 50,
+        index_alias: "jobseeker_jobs_active",
+        physical_index_name: "jobseeker_jobs_run_failed",
+        celery_task_id: "celery-failed",
+        error_message: "Embedding sync incomplete: indexed=0 failed=50 target_total=50",
+        started_at: null,
+        finished_at: null,
+        updated_at: null,
+        activated_at: null,
+      },
+      active_run: {
+        id: "run-2",
+        status: "completed",
+        mode: "full",
+        unique_only: true,
+        embed_source: "ollama",
+        embed_model: "nomic-embed-text",
+        embed_dims: 768,
+        embed_profile: "nomic-legacy-v1",
+        db_total_snapshot: 100,
+        selection_total: 50,
+        target_total: 50,
+        processed: 50,
+        indexed: 50,
+        failed: 0,
+        index_alias: "jobseeker_jobs_active",
+        physical_index_name: "jobseeker_jobs_run_2",
+        celery_task_id: "celery-2",
+        error_message: null,
+        started_at: null,
+        finished_at: null,
+        updated_at: null,
+        activated_at: "2026-03-10T19:53:28Z",
+      },
+      active_index_name: "jobseeker_jobs_active",
+      active_indexed_documents: 50,
+      current_config_matches_active: false,
+      reindex_required: true,
+      legacy_indices: [],
+      recommendations: {
+        status: "reindex_required",
+        message:
+          "The active embedding index still uses the legacy raw-text nomic profile, but the current configuration uses prefix-correct nomic search embeddings. Run a full rebuild to activate the new index.",
+        active_embed_model: "nomic-embed-text",
+        active_embed_dims: 768,
+        active_embed_profile: "nomic-legacy-v1",
+        selected_embed_model: "nomic-embed-text",
+        selected_embed_dims: 768,
+        selected_embed_profile: "nomic-search-v1",
+        active_query_model_ready: false,
+      },
+    });
+    vi.mocked(api.resumeAnalyze).mockResolvedValue({
+      extracted_skills: ["Python"],
+      match_count: 0,
+      matches: [],
+      by_category: [],
+    });
+    vi.mocked(api.resumeRecommendations).mockResolvedValue({
+      status: "reindex_required",
+      message:
+        "The active embedding index still uses the legacy raw-text nomic profile, but the current configuration uses prefix-correct nomic search embeddings. Run a full rebuild to activate the new index.",
+      recommendations: [],
+      active_run: null,
+      config_matches_active: false,
+    });
+
+    renderWithRouter(<ResumeAnalysisPage />);
+    await waitFor(() => expect(api.listCategories).toHaveBeenCalled());
+
+    const user = userEvent.setup();
+    const file = new File(["fake pdf content"], "resume.pdf", {
+      type: "application/pdf",
+    });
+    const input = document.getElementById("resume-upload") as HTMLInputElement;
+    await user.upload(input, file);
+
+    await waitFor(() => expect(api.resumeRecommendations).toHaveBeenCalled());
+    expect(await screen.findByRole("alert")).toHaveTextContent(
+      /legacy raw-text nomic profile/i,
+    );
+  });
+
   it("does not show RAG indexing guidance when the resume produced no extracted skills", async () => {
     vi.mocked(api.resumeAnalyze).mockResolvedValue({
       extracted_skills: [],
