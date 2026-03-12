@@ -55,8 +55,8 @@ def _effective_embed_settings(ai_cfg: dict[str, Any]) -> tuple[str, str, int]:
     source = str(ai_cfg.get("embed_source") or "ollama").strip().lower()
     if source == "openai":
         return source, OPENAI_EMBED_MODEL, OPENAI_EMBED_DIMS
-    model = str(ai_cfg.get("embed_model") or "").strip() or "all-minilm"
-    dims = resolve_ollama_embed_dims(model, int(ai_cfg.get("embed_dims") or 0) or 384)
+    model = str(ai_cfg.get("embed_model") or "").strip() or "bge-base-en:v1.5"
+    dims = resolve_ollama_embed_dims(model, int(ai_cfg.get("embed_dims") or 0) or 768)
     return source, model, dims
 
 
@@ -182,19 +182,44 @@ def activate_run(db: Session, row: EmbeddingSyncRunRow) -> None:
     row.updated_at = _now()
 
 
+def _run_is_queryable(
+    row: EmbeddingSyncRunRow | None,
+    *,
+    active_indexed_documents: int,
+) -> bool:
+    if not row:
+        return False
+    if row.status != "completed" or row.activated_at is None:
+        return False
+    if int(row.failed or 0) != 0:
+        return False
+    if not str(row.physical_index_name or "").strip():
+        return False
+    if row.mode == "full":
+        target_total = int(row.target_total or 0)
+        indexed = int(row.indexed or 0)
+        if target_total <= 0 or indexed <= 0 or indexed != target_total:
+            return False
+    return int(active_indexed_documents or 0) > 0
+
+
 def get_status(db: Session) -> dict[str, Any]:
     available = es_available()
     latest_or_running = get_running_run(db) or get_latest_run(db)
     active_run = get_active_run(db)
     ai_cfg = get_ai_config(db)
     current_db_total = int(db.query(JobRow).count())
-    current_config_matches_active = _config_matches_run(ai_cfg, active_run)
     active_index_name = None
     active_indexed_documents = 0
     if active_run:
         active_index_name = active_run.index_alias or active_run.physical_index_name
         if active_index_name and available:
             active_indexed_documents = count_documents(active_index_name)
+    active_run_usable = _run_is_queryable(
+        active_run,
+        active_indexed_documents=active_indexed_documents,
+    )
+    current_config_matches_active = active_run_usable and _config_matches_run(ai_cfg, active_run)
 
     return {
         "available": available,
@@ -204,7 +229,7 @@ def get_status(db: Session) -> dict[str, Any]:
         "active_index_name": active_index_name,
         "active_indexed_documents": active_indexed_documents,
         "current_config_matches_active": current_config_matches_active,
-        "reindex_required": active_run is None or not current_config_matches_active,
+        "reindex_required": not active_run_usable or not current_config_matches_active,
         "legacy_indices": list_legacy_job_indices() if available else [],
     }
 
@@ -252,8 +277,10 @@ def queue_sync_run(
     if normalized_mode == "full":
         physical_index_name = managed_index_name(str(run_id))
     else:
-        if not active_run:
-            raise IncrementalReindexRequiredError("No active embedding index. Run a full rebuild first.")
+        active_index_name = active_run.index_alias or active_run.physical_index_name if active_run else None
+        active_indexed_documents = count_documents(active_index_name) if active_index_name and es_available() else 0
+        if not _run_is_queryable(active_run, active_indexed_documents=active_indexed_documents):
+            raise IncrementalReindexRequiredError("No usable active embedding index. Run a full rebuild first.")
         if active_run.unique_only != unique_only or not _config_matches_run(ai_cfg, active_run):
             raise IncrementalReindexRequiredError(
                 "Incremental indexing requires the same duplicate setting and embedding configuration as the active index."
@@ -385,7 +412,16 @@ def run_sync_task(run_id: str) -> None:
             )
             db.refresh(row)
 
+        db.refresh(row)
+        if int(row.failed or 0) != 0:
+            raise RuntimeError(
+                f"Embedding sync incomplete: indexed={int(row.indexed or 0)} failed={int(row.failed or 0)} target_total={int(row.target_total or 0)}"
+            )
         if row.mode == "full":
+            if int(row.target_total or 0) <= 0 or int(row.indexed or 0) <= 0 or int(row.indexed or 0) != int(row.target_total or 0):
+                raise RuntimeError(
+                    f"Full embedding rebuild incomplete: indexed={int(row.indexed or 0)} failed={int(row.failed or 0)} target_total={int(row.target_total or 0)}"
+                )
             if not activate_alias(row.index_alias, row.physical_index_name):
                 raise RuntimeError("Failed to activate Elasticsearch alias")
 
@@ -420,8 +456,19 @@ def resolve_active_recommendation_source(db: Session) -> dict[str, Any]:
             "config_matches_active": False,
         }
 
-    current_config_matches_active = _config_matches_run(ai_cfg, active_run)
     active_index_name = active_run.index_alias or active_run.physical_index_name
+    active_indexed_documents = count_documents(active_index_name) if active_index_name and es_available() else 0
+    if not _run_is_queryable(active_run, active_indexed_documents=active_indexed_documents):
+        return {
+            "status": "reindex_required",
+            "message": "The active embedding index is incomplete or empty. Run a full re-index.",
+            "active_run": active_run,
+            "active_run_meta": serialize_run(active_run),
+            "active_index_name": active_index_name,
+            "config_matches_active": False,
+        }
+
+    current_config_matches_active = _config_matches_run(ai_cfg, active_run)
     return {
         "status": "ok",
         "message": None,

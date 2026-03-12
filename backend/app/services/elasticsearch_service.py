@@ -22,7 +22,7 @@ ES_TIMEOUT = int(os.environ.get("ES_TIMEOUT", "30"))
 JOBS_INDEX = "jobseeker_jobs"
 JOBS_INDEX_ALIAS = f"{JOBS_INDEX}_active"
 MANAGED_INDEX_PREFIX = f"{JOBS_INDEX}_run"
-BULK_BATCH_SIZE = int(os.environ.get("EMBED_BULK_BATCH_SIZE", "48"))
+BULK_BATCH_SIZE = int(os.environ.get("EMBED_BULK_BATCH_SIZE", "8"))
 ES_BULK_CHUNK_SIZE = int(os.environ.get("ES_BULK_CHUNK_SIZE", "500"))
 ES_INDEX_REPLICAS = int(os.environ.get("ES_INDEX_REPLICAS", "0"))
 
@@ -358,7 +358,7 @@ def index_job(
         return False
     text = _job_to_text(job)
     if embedding is None:
-        embedding = embed_text(text, model=embed_model, ai_config=ai_config)
+        embedding = embed_text(text, model=embed_model, ai_config=ai_config, usage="document")
     if not embedding or len(embedding) != embed_dims:
         return False
     index_name = _index_for_dims(embed_dims)
@@ -395,7 +395,7 @@ def bulk_index_jobs_with_progress(
     for i in range(0, total, BULK_BATCH_SIZE):
         batch = jobs[i : i + BULK_BATCH_SIZE]
         texts = [_job_to_text(j) for j in batch]
-        embeddings = embed_batch(texts, model=embed_model, ai_config=ai_config)
+        embeddings = embed_batch(texts, model=embed_model, ai_config=ai_config, usage="document")
         if len(embeddings) != len(batch):
             log.warning("Embedding count mismatch: got %d, expected %d", len(embeddings), len(batch))
             embeddings = embeddings[: len(batch)]
@@ -478,7 +478,7 @@ def iter_index_job_batches(
     for i in range(0, total, BULK_BATCH_SIZE):
         batch = jobs[i : i + BULK_BATCH_SIZE]
         texts = [_job_to_text(j) for j in batch]
-        embeddings = embed_batch(texts, model=embed_model, ai_config=ai_config)
+        embeddings = embed_batch(texts, model=embed_model, ai_config=ai_config, usage="document")
         aligned_embeddings = list(embeddings[: len(batch)])
         if len(aligned_embeddings) < len(batch):
             aligned_embeddings.extend([None] * (len(batch) - len(aligned_embeddings)))

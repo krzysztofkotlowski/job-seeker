@@ -451,6 +451,7 @@ def retrieve_semantic_matches(
         query_text,
         model=resolved.get("embed_model") or embed_model,
         ai_config=resolved.get("embed_ai_config"),
+        usage="query",
     )
     if not embedding:
         return []
@@ -584,6 +585,7 @@ def retrieve_hybrid_recommendations_response(
         query_text,
         model=resolved.get("embed_model") or embed_model,
         ai_config=resolved.get("embed_ai_config"),
+        usage="query",
     )
     if not embedding:
         log.warning("Resume recommendations: query embedding failed for active index %s", active_index_name)

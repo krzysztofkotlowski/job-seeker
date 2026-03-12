@@ -29,8 +29,8 @@ import type {
 } from "../api/types";
 import { useToast } from "../contexts/useToast";
 
-const DEFAULT_LLM_MODEL = "qwen2.5:3b";
-const DEFAULT_EMBED_MODEL = "all-minilm";
+const DEFAULT_LLM_MODEL = "qwen2.5:7b";
+const DEFAULT_EMBED_MODEL = "bge-base-en:v1.5";
 
 const EMBED_FAMILIES = ["nomic", "all-minilm", "mxbai", "bge"];
 

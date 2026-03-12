@@ -11,8 +11,8 @@ vi.mock("../api/client", () => ({
     aiListModels: vi.fn().mockResolvedValue({
       models: [
         {
-          name: "qwen2.5:3b",
-          model: "qwen2.5:3b",
+          name: "qwen2.5:7b",
+          model: "qwen2.5:7b",
           role: "chat",
           available: true,
           active: true,
@@ -21,8 +21,8 @@ vi.mock("../api/client", () => ({
           details: { status: "active" },
         },
         {
-          name: "all-minilm",
-          model: "all-minilm",
+          name: "bge-base-en:v1.5",
+          model: "bge-base-en:v1.5",
           role: "embedding",
           available: false,
           active: false,
@@ -38,9 +38,9 @@ vi.mock("../api/client", () => ({
       openai_llm_model: "gpt-4o-mini",
       embed_source: "ollama",
       api_key_set: false,
-      llm_model: "qwen2.5:3b",
-      embed_model: "all-minilm",
-      embed_dims: 384,
+      llm_model: "qwen2.5:7b",
+      embed_model: "bge-base-en:v1.5",
+      embed_dims: 768,
       temperature: 0.3,
       max_output_tokens: 1024,
     }),
@@ -108,14 +108,14 @@ describe("AIConfigContent", () => {
     expect(payload.openai_llm_model).toBe("gpt-4o-mini");
     expect(payload.embed_source).toBe("ollama");
     expect(payload).not.toHaveProperty("llm_model");
-    expect(payload.embed_model).toBe("all-minilm");
+    expect(payload.embed_model).toBe("bge-base-en:v1.5");
   });
 
   it("shows resolved embedding dims from the saved config", async () => {
     renderWithProviders();
 
     expect(
-      await screen.findByText(/Resolved embedding dims:\s*384/i),
+      await screen.findByText(/Resolved embedding dims:\s*768/i),
     ).toBeInTheDocument();
   });
 
@@ -126,9 +126,9 @@ describe("AIConfigContent", () => {
       openai_llm_model: "gpt-4o-mini",
       embed_source: "ollama",
       api_key_set: false,
-      llm_model: "qwen2.5:3b",
-      embed_model: "all-minilm",
-      embed_dims: 384,
+      llm_model: "qwen2.5:7b",
+      embed_model: "bge-base-en:v1.5",
+      embed_dims: 768,
       temperature: 0.3,
       max_output_tokens: 1024,
     });
@@ -146,18 +146,18 @@ describe("AIConfigContent", () => {
       expect(api.aiUpdateConfig).toHaveBeenCalled();
     });
 
-    expect(api.aiEnsureModel).toHaveBeenNthCalledWith(1, "qwen2.5:3b");
-    expect(api.aiEnsureModel).toHaveBeenNthCalledWith(2, "all-minilm");
+    expect(api.aiEnsureModel).toHaveBeenNthCalledWith(1, "qwen2.5:7b");
+    expect(api.aiEnsureModel).toHaveBeenNthCalledWith(2, "bge-base-en:v1.5");
   });
 
   it("renders supported self-hosted catalog models with availability labels", async () => {
     renderWithProviders();
 
     expect(
-      await screen.findByText("qwen2.5:3b · active"),
+      await screen.findByText("qwen2.5:7b · active"),
     ).toBeInTheDocument();
     expect(
-      await screen.findByText("all-minilm · not installed"),
+      await screen.findByText("bge-base-en:v1.5 · not installed"),
     ).toBeInTheDocument();
   });
 });

@@ -2,8 +2,13 @@
 set -eu
 
 THIN_LLAMA_URL="${THIN_LLAMA_URL:-http://thin-llama:8080}"
-EMBED_MODEL="${EMBED_MODEL:-all-minilm}"
-LLM_MODEL="${LLM_MODEL:-qwen2.5:3b}"
+EMBED_MODEL="${EMBED_MODEL:-bge-base-en:v1.5}"
+LLM_MODEL="${LLM_MODEL:-qwen2.5:7b}"
+
+extract_embedding_pid() {
+  health_json="$1"
+  printf '%s' "$health_json" | sed -n 's/.*"embedding":{"role":"embedding","model_name":"[^"]*","port":[0-9][0-9]*,"pid":\([0-9][0-9]*\).*/\1/p'
+}
 
 wait_for_runtime() {
   ready=0
@@ -90,14 +95,32 @@ if ! grep -q '"done":true' /tmp/chat-smoke.out; then
   exit 1
 fi
 
-echo "Running embedding smoke test..."
-post_json "/api/embed" "{\"model\":\"$EMBED_MODEL\",\"input\":\"hello world\"}" /tmp/embed-smoke.out
-if ! grep -q '"embeddings"' /tmp/embed-smoke.out; then
-  echo "Embedding smoke test did not return embeddings."
-  cat /tmp/embed-smoke.out
+initial_health="$(curl -sS "$THIN_LLAMA_URL/health")"
+initial_embed_pid="$(extract_embedding_pid "$initial_health")"
+if [ -z "$initial_embed_pid" ]; then
+  echo "Failed to determine embedding PID before smoke tests."
+  echo "$initial_health"
   exit 1
 fi
 
+echo "Running repeated embedding smoke tests..."
+for attempt in 1 2 3; do
+  post_json "/api/embed" "{\"model\":\"$EMBED_MODEL\",\"input\":[\"hello world\",\"vector search\"]}" "/tmp/embed-smoke-${attempt}.out"
+  if ! grep -q '"embeddings"' "/tmp/embed-smoke-${attempt}.out"; then
+    echo "Embedding smoke test ${attempt} did not return embeddings."
+    cat "/tmp/embed-smoke-${attempt}.out"
+    exit 1
+  fi
+done
+
 echo "Re-checking runtime after smoke tests..."
 wait_for_runtime
+final_health="$(curl -sS "$THIN_LLAMA_URL/health")"
+final_embed_pid="$(extract_embedding_pid "$final_health")"
+if [ -z "$final_embed_pid" ] || [ "$initial_embed_pid" != "$final_embed_pid" ]; then
+  echo "Embedding PID changed during smoke tests (initial=$initial_embed_pid final=${final_embed_pid:-missing})."
+  echo "$initial_health"
+  echo "$final_health"
+  exit 1
+fi
 echo "Models ready."

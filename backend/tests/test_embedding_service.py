@@ -43,6 +43,35 @@ def test_embed_text_returns_vector_when_ollama_responds():
     assert result[0] == 0.1
 
 
+def test_embed_text_prefixes_bge_query_inputs():
+    """BGE query embeddings should use the model-card search prefix."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {"embeddings": [[0.1] * 768]}
+
+    with (
+        patch.object(embedding_service, "EMBED_URL", "http://ollama:11434"),
+        patch.object(embedding_service, "httpx") as mock_httpx,
+    ):
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.post.return_value = mock_resp
+        mock_httpx.Client.return_value = mock_client
+
+        embedding_service.embed_text(
+            "distributed systems",
+            model="bge-base-en:v1.5",
+            ai_config={"embed_source": "ollama"},
+            usage="query",
+        )
+
+    posted = mock_client.post.call_args.kwargs["json"]
+    assert posted["input"].startswith(embedding_service.BGE_QUERY_PREFIX)
+    assert posted["input"].endswith("distributed systems")
+
+
 def test_embed_batch_returns_list():
     """embed_batch returns list of vectors."""
     mock_resp = MagicMock()
@@ -63,6 +92,34 @@ def test_embed_batch_returns_list():
         result = embedding_service.embed_batch(["a", "b"])
     assert len(result) == 2
     assert len(result[0]) == 768
+
+
+def test_embed_batch_keeps_bge_document_inputs_raw():
+    """Document indexing should not add the BGE query prefix."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {"embeddings": [[0.1] * 768, [0.2] * 768]}
+
+    with (
+        patch.object(embedding_service, "EMBED_URL", "http://ollama:11434"),
+        patch.object(embedding_service, "httpx") as mock_httpx,
+    ):
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.post.return_value = mock_resp
+        mock_httpx.Client.return_value = mock_client
+
+        embedding_service.embed_batch(
+            ["python backend", "distributed systems"],
+            model="bge-base-en:v1.5",
+            ai_config={"embed_source": "ollama"},
+            usage="document",
+        )
+
+    posted = mock_client.post.call_args.kwargs["json"]
+    assert posted["input"] == ["python backend", "distributed systems"]
 
 
 def test_embed_batch_returns_empty_when_no_url():

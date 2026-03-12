@@ -14,13 +14,39 @@ from app.services.self_hosted_runtime_service import (
 log = logging.getLogger(__name__)
 
 EMBED_URL = os.environ.get("LLM_URL", "").rstrip("/")
-EMBED_MODEL = os.environ.get("EMBED_MODEL", "all-minilm")
+EMBED_MODEL = os.environ.get("EMBED_MODEL", "bge-base-en:v1.5")
 EMBED_TIMEOUT = int(os.environ.get("EMBED_TIMEOUT", "120"))
 
-# all-minilm: 384 dims; text-embedding-3-small: 1536 dims
-EMBED_DIMS = int(os.environ.get("EMBED_DIMS", "384"))
+# bge-base-en:v1.5: 768 dims; text-embedding-3-small: 1536 dims
+EMBED_DIMS = int(os.environ.get("EMBED_DIMS", "768"))
 OPENAI_EMBED_MODEL = "text-embedding-3-small"
 OPENAI_EMBED_DIMS = 1536
+BGE_QUERY_PREFIX = "Represent this sentence for searching relevant passages: "
+
+
+def _clean_text(value: str | None) -> str:
+    return str(value or "").strip()
+
+
+def _is_bge_embedding_model(model: str | None) -> bool:
+    normalized = _clean_text(model).lower()
+    return "bge" in normalized
+
+
+def _prepare_embedding_input(
+    text: str,
+    *,
+    model: str | None,
+    ai_config: dict | None,
+    usage: str,
+) -> str:
+    cleaned = _clean_text(text)
+    if not cleaned:
+        return ""
+    source = _clean_text((ai_config or {}).get("embed_source")).lower() or "ollama"
+    if source != "openai" and usage == "query" and _is_bge_embedding_model(model):
+        return f"{BGE_QUERY_PREFIX}{cleaned}"
+    return cleaned
 
 
 def embed_text_openai(text: str, model: str | None = None, api_key: str | None = None) -> list[float] | None:
@@ -96,7 +122,12 @@ def get_ollama_embedding_dims(model: str | None) -> int | None:
     dims = get_self_hosted_embedding_dims(requested)
     if isinstance(dims, int) and dims > 0:
         return dims
-    vec = embed_text("dimension probe", model=requested, ai_config={"embed_source": "ollama"})
+    vec = embed_text(
+        "dimension probe",
+        model=requested,
+        ai_config={"embed_source": "ollama"},
+        usage="document",
+    )
     if not vec:
         return None
     try:
@@ -109,6 +140,8 @@ def embed_text(
     text: str,
     model: str | None = None,
     ai_config: dict | None = None,
+    *,
+    usage: str = "document",
 ) -> list[float] | None:
     """
     Embed a single text string. Returns None if service unavailable or error.
@@ -120,11 +153,19 @@ def embed_text(
             model=(model or "").strip() or OPENAI_EMBED_MODEL,
             api_key=ai_config["openai_api_key"],
         )
-    if not EMBED_URL or not text or not str(text).strip():
+    if not EMBED_URL:
         return None
     effective_model = (model or "").strip() or EMBED_MODEL
+    prepared = _prepare_embedding_input(
+        text,
+        model=effective_model,
+        ai_config=ai_config,
+        usage=usage,
+    )
+    if not prepared:
+        return None
     url = f"{EMBED_URL}/api/embed"
-    payload = {"model": effective_model, "input": str(text).strip()[:8000]}
+    payload = {"model": effective_model, "input": prepared[:8000]}
     try:
         with httpx.Client(timeout=EMBED_TIMEOUT) as client:
             resp = client.post(url, json=payload)
@@ -146,6 +187,8 @@ def embed_batch(
     texts: list[str],
     model: str | None = None,
     ai_config: dict | None = None,
+    *,
+    usage: str = "document",
 ) -> list[list[float]]:
     """
     Embed multiple texts. Returns list of vectors.
@@ -159,10 +202,21 @@ def embed_batch(
         )
     if not EMBED_URL or not texts:
         return []
-    cleaned = [str(t).strip()[:8000] for t in texts if t and str(t).strip()]
+    effective_model = (model or "").strip() or EMBED_MODEL
+    cleaned = [
+        prepared[:8000]
+        for text in texts
+        if (
+            prepared := _prepare_embedding_input(
+                text,
+                model=effective_model,
+                ai_config=ai_config,
+                usage=usage,
+            )
+        )
+    ]
     if not cleaned:
         return []
-    effective_model = (model or "").strip() or EMBED_MODEL
     url = f"{EMBED_URL}/api/embed"
     payload = {"model": effective_model, "input": cleaned}
     try:

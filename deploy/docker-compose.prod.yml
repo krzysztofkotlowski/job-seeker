@@ -76,8 +76,8 @@ services:
     image: curlimages/curl:8.8.0
     entrypoint: ["/bin/sh", "/thin-llama-init.sh"]
     environment:
-      - EMBED_MODEL=${EMBED_MODEL:-all-minilm}
-      - LLM_MODEL=${LLM_MODEL:-qwen2.5:3b}
+      - EMBED_MODEL=${EMBED_MODEL:-bge-base-en:v1.5}
+      - LLM_MODEL=${LLM_MODEL:-qwen2.5:7b}
     volumes:
       - ./scripts/thin-llama-init.sh:/thin-llama-init.sh:ro
     depends_on:
@@ -96,14 +96,15 @@ services:
       - KEYCLOAK_REALM=jobseeker
       - KEYCLOAK_ENABLED=${KEYCLOAK_ENABLED:-false}
       - LLM_URL=http://thin-llama:8080
-      - LLM_MODEL=${LLM_MODEL:-qwen2.5:3b}
+      - LLM_MODEL=${LLM_MODEL:-qwen2.5:7b}
       - LLM_MAX_OUTPUT_TOKENS=${LLM_MAX_OUTPUT_TOKENS:-400}
       - LLM_TIMEOUT=30
       - LLM_SUMMARIZE_TIMEOUT=90
       - ELASTICSEARCH_URL=http://elasticsearch:9200
       - ES_TIMEOUT=30
-      - EMBED_MODEL=${EMBED_MODEL:-all-minilm}
-      - EMBED_DIMS=${EMBED_DIMS:-384}
+      - EMBED_MODEL=${EMBED_MODEL:-bge-base-en:v1.5}
+      - EMBED_DIMS=${EMBED_DIMS:-768}
+      - EMBED_BULK_BATCH_SIZE=${EMBED_BULK_BATCH_SIZE:-8}
       - RAG_ENABLED=${RAG_ENABLED:-true}
       - CORS_ORIGINS=${CORS_ORIGINS:-*}
       - CELERY_BROKER_URL=redis://redis:6379/0
@@ -144,14 +145,15 @@ services:
     environment:
       - DATABASE_URL=postgresql://jobseeker:${POSTGRES_PASSWORD:-jobseeker}@postgres:5432/jobseeker
       - LLM_URL=http://thin-llama:8080
-      - LLM_MODEL=${LLM_MODEL:-qwen2.5:3b}
+      - LLM_MODEL=${LLM_MODEL:-qwen2.5:7b}
       - LLM_MAX_OUTPUT_TOKENS=${LLM_MAX_OUTPUT_TOKENS:-400}
       - LLM_TIMEOUT=30
       - LLM_SUMMARIZE_TIMEOUT=90
       - ELASTICSEARCH_URL=http://elasticsearch:9200
       - ES_TIMEOUT=30
-      - EMBED_MODEL=${EMBED_MODEL:-all-minilm}
-      - EMBED_DIMS=${EMBED_DIMS:-384}
+      - EMBED_MODEL=${EMBED_MODEL:-bge-base-en:v1.5}
+      - EMBED_DIMS=${EMBED_DIMS:-768}
+      - EMBED_BULK_BATCH_SIZE=${EMBED_BULK_BATCH_SIZE:-8}
       - RAG_ENABLED=${RAG_ENABLED:-true}
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0

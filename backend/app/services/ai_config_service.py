@@ -17,11 +17,11 @@ from app.services.self_hosted_runtime_service import (
 
 log = logging.getLogger(__name__)
 
-DEFAULT_LLM_MODEL = os.environ.get("LLM_MODEL", "qwen2.5:3b") or "qwen2.5:3b"
-DEFAULT_EMBED_MODEL = os.environ.get("EMBED_MODEL", "all-minilm") or "all-minilm"
+DEFAULT_LLM_MODEL = os.environ.get("LLM_MODEL", "qwen2.5:7b") or "qwen2.5:7b"
+DEFAULT_EMBED_MODEL = os.environ.get("EMBED_MODEL", "bge-base-en:v1.5") or "bge-base-en:v1.5"
 DEFAULT_MAX_TOKENS = int(os.environ.get("LLM_MAX_OUTPUT_TOKENS", "2048") or "2048")
 OPENAI_EMBED_DIMS = 1536
-OLLAMA_EMBED_DIMS = int(os.environ.get("EMBED_DIMS", "384") or "384")
+OLLAMA_EMBED_DIMS = int(os.environ.get("EMBED_DIMS", "768") or "768")
 
 OPENAI_LLM_MODELS = [
     "gpt-4o",

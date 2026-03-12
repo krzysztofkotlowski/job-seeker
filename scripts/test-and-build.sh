@@ -86,7 +86,7 @@ if [ "$THIN_LLAMA_READY" -eq 0 ]; then
   echo "  Start manually: docker compose up -d thin-llama"
   echo "  Then bootstrap models: docker compose run --rm thin-llama-init"
 else
-  echo "Bootstrapping qwen2.5:3b and all-minilm..."
+  echo "Bootstrapping qwen2.5:7b and bge-base-en:v1.5..."
   if ! docker compose run --rm thin-llama-init; then
     echo "ERROR: Failed to bootstrap thin-llama models. AI summaries and RAG will not work."
     exit 1

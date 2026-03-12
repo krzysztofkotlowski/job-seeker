@@ -350,6 +350,56 @@ def test_embedding_status_returns_persistent_run_progress(client: TestClient, db
     assert data["run"]["unique_only"] is True
 
 
+def test_embedding_status_marks_zero_doc_failed_active_run_as_reindex_required(client: TestClient, db):
+    """A failed full rebuild must not be treated as a healthy active recommendation source."""
+    from datetime import datetime, timezone
+    from uuid import uuid4
+
+    from app.models.tables import EmbeddingSyncRunRow
+
+    db.query(EmbeddingSyncRunRow).delete(synchronize_session=False)
+    db.commit()
+
+    run = EmbeddingSyncRunRow(
+        id=uuid4(),
+        status="completed",
+        mode="full",
+        unique_only=False,
+        embed_source="ollama",
+        embed_model="bge-base-en:v1.5",
+        embed_dims=768,
+        db_total_snapshot=11783,
+        selection_total=11783,
+        target_total=11783,
+        processed=11783,
+        indexed=0,
+        failed=11783,
+        index_alias="jobseeker_jobs_active",
+        physical_index_name="jobseeker_jobs_run_broken",
+        started_at=datetime.now(timezone.utc),
+        finished_at=datetime.now(timezone.utc),
+        updated_at=datetime.now(timezone.utc),
+        activated_at=datetime.now(timezone.utc),
+    )
+    db.add(run)
+    db.commit()
+
+    with (
+        patch("app.services.embedding_sync_service.es_available", return_value=True),
+        patch("app.services.embedding_sync_service.list_legacy_job_indices", return_value=[]),
+        patch("app.services.embedding_sync_service.count_documents", return_value=0),
+    ):
+        r = client.get("/api/v1/jobs/embedding-status")
+
+    assert r.status_code == 200, r.text
+    data = r.json()
+    assert data["active_run"]["id"] == str(run.id)
+    assert data["active_index_name"] == "jobseeker_jobs_active"
+    assert data["active_indexed_documents"] == 0
+    assert data["current_config_matches_active"] is False
+    assert data["reindex_required"] is True
+
+
 def test_enrich_batch_missing_ids(client: TestClient):
     r = client.post("/api/v1/jobs/enrich")
     assert r.status_code == 400

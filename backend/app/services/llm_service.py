@@ -160,7 +160,7 @@ _INJECTION_PATTERNS = (
 )
 _INJECTION_RE = re.compile("|".join(f"({p})" for p in _INJECTION_PATTERNS), re.IGNORECASE)
 
-DEFAULT_LLM_MODEL = "qwen2.5:3b"
+DEFAULT_LLM_MODEL = "qwen2.5:7b"
 
 
 @dataclass

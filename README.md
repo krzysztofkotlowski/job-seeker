@@ -92,7 +92,7 @@ The recommendation pipeline uses the currently activated embedding run rather th
 | Backend  | FastAPI, SQLAlchemy 2, Pydantic 2, PyPDF, SlowAPI             |
 | Data     | PostgreSQL 16, Elasticsearch 8                                |
 | Async    | Celery 5, Redis 7                                             |
-| AI       | thin-llama, OpenAI, local embeddings via `all-minilm` by default |
+| AI       | thin-llama, OpenAI, local embeddings via `bge-base-en:v1.5` by default |
 | Infra    | Docker Compose, Nginx frontend container, GitHub Actions CI   |
 
 ## Local Quick Start
@@ -153,9 +153,9 @@ The frontend proxies `/api` to the backend through Vite during development.
 
 ### Default local AI setup
 
-- Summary model: `qwen2.5:3b`
-- Embedding model: `all-minilm`
-- Vector dimensions: `384`
+- Summary model: `qwen2.5:7b`
+- Embedding model: `bge-base-en:v1.5`
+- Vector dimensions: `768`
 
 Bootstrap the self-hosted runtime manually if needed:
 

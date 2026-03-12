@@ -175,6 +175,8 @@ def test_retrieve_semantic_matches_returns_matches(db):
         patch.object(embed_mod, "is_ollama_model_ready", return_value=True),
         patch.object(es_mod, "is_available") as mock_avail,
         patch.object(es_mod, "search_similar") as mock_search,
+        patch("app.services.embedding_sync_service.es_available", return_value=True),
+        patch("app.services.embedding_sync_service.count_documents", return_value=1),
     ):
         mock_avail.return_value = True
         mock_embed.return_value = [0.1] * 768
@@ -187,6 +189,7 @@ def test_retrieve_semantic_matches_returns_matches(db):
     assert result[0]["job"]["title"] == "ML Engineer"
     assert result[0].get("semantic") is True
     mock_search.assert_called_once()
+    assert mock_embed.call_args.kwargs["usage"] == "query"
     assert mock_search.call_args.kwargs["index_name"] == "jobseeker_jobs_active"
 
 
@@ -356,6 +359,8 @@ def test_retrieve_hybrid_recommendations_uses_active_run_metadata_when_config_ch
                 }
             ],
         ) as mock_hybrid,
+        patch("app.services.embedding_sync_service.es_available", return_value=True),
+        patch("app.services.embedding_sync_service.count_documents", return_value=1),
     ):
         result = retrieve_hybrid_recommendations(
             db,
@@ -421,6 +426,8 @@ def test_retrieve_hybrid_recommendations_includes_explanation_for_hybrid_hits(db
                 }
             ],
         ),
+        patch("app.services.embedding_sync_service.es_available", return_value=True),
+        patch("app.services.embedding_sync_service.count_documents", return_value=1),
     ):
         result = retrieve_hybrid_recommendations(
             db,
