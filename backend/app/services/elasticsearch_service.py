@@ -602,14 +602,38 @@ def _merge_rrf(
         r_a = rank_a.get(jid, max_rank)
         r_b = rank_b.get(jid, max_rank)
         rrf_score = 1.0 / (k + r_a) + 1.0 / (k + r_b)
-        doc = doc_a.get(jid) or doc_b.get(jid)
+        da, db = doc_a.get(jid), doc_b.get(jid)
+        doc = da or db
         if doc:
             doc = dict(doc)
             doc["score"] = rrf_score
+            # Merge sources and rank metadata when hit appears in both lists
+            if da and db:
+                sources_a = da.get("sources") or {}
+                sources_b = db.get("sources") or {}
+                doc["sources"] = {
+                    "keyword": sources_a.get("keyword", False) or sources_b.get("keyword", False),
+                    "semantic": sources_a.get("semantic", False) or sources_b.get("semantic", False),
+                }
+                if "keyword_rank" in da or "keyword_rank" in db:
+                    doc["keyword_rank"] = da.get("keyword_rank") or db.get("keyword_rank")
+                if "semantic_rank" in da or "semantic_rank" in db:
+                    doc["semantic_rank"] = da.get("semantic_rank") or db.get("semantic_rank")
+                if "keyword_score" in da or "keyword_score" in db:
+                    doc["keyword_score"] = da.get("keyword_score") or db.get("keyword_score")
+                if "semantic_score" in da or "semantic_score" in db:
+                    doc["semantic_score"] = da.get("semantic_score") or db.get("semantic_score")
             scored.append((rrf_score, doc))
 
     scored.sort(key=lambda x: -x[0])
-    return [d for _, d in scored]
+    out = [d for _, d in scored]
+    # Assign merged rank (1-based position) for explainability when doc came from both lists
+    for i, d in enumerate(out):
+        rank = i + 1
+        if d.get("sources", {}).get("keyword") and d.get("sources", {}).get("semantic"):
+            d["keyword_rank"] = rank
+            d["semantic_rank"] = rank
+    return out
 
 
 def search_similar(

@@ -276,7 +276,7 @@ def test_sync_embeddings_normalizes_stale_ollama_dims_before_queueing(client: Te
     fake_task = type("Task", (), {"id": "celery-3"})()
     with (
         patch("app.services.elasticsearch_service.is_available", return_value=True),
-        patch("app.services.ai_config_service.get_ollama_embedding_dims", return_value=768),
+        patch("app.services.embedding_sync_service.get_ollama_embedding_dims", return_value=768),
         patch("app.routers.jobs.run_embedding_sync.delay", return_value=fake_task),
     ):
         r = client.post("/api/v1/jobs/sync-embeddings", params={"mode": "full"})

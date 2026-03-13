@@ -176,6 +176,7 @@ def test_retrieve_semantic_matches_returns_matches(db):
         patch("app.services.resume_service.RAG_ENABLED", True),
         patch.object(embed_mod, "embed_text") as mock_embed,
         patch.object(embed_mod, "is_ollama_model_ready", return_value=True),
+        patch.object(embed_mod, "is_ollama_model_available", return_value=True),
         patch.object(es_mod, "is_available") as mock_avail,
         patch.object(es_mod, "search_similar") as mock_search,
         patch("app.services.embedding_sync_service.es_available", return_value=True),
@@ -227,6 +228,7 @@ def test_retrieve_hybrid_recommendations_dims_mismatch_requires_rebuild(db):
     with (
         patch.object(embed_mod, "embed_text", return_value=[0.1] * 1536),
         patch.object(embed_mod, "is_ollama_model_ready", return_value=True),
+        patch.object(embed_mod, "is_ollama_model_available", return_value=True),
         patch.object(es_mod, "is_available", return_value=True),
         patch.object(es_mod, "search_hybrid", return_value=[]),
         patch.object(
@@ -477,6 +479,7 @@ def test_retrieve_hybrid_recommendations_includes_explanation_for_hybrid_hits(db
     with (
         patch.object(embed_mod, "embed_text", return_value=[0.1] * 768),
         patch.object(embed_mod, "is_ollama_model_ready", return_value=True),
+        patch.object(embed_mod, "is_ollama_model_available", return_value=True),
         patch.object(es_mod, "is_available", return_value=True),
         patch.object(
             es_mod,

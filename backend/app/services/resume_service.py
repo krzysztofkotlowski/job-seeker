@@ -66,8 +66,54 @@ def _hydrate_hits_to_jobs(db: Session, hits: list[dict]) -> list[dict]:
                 "url": h.get("url", ""),
                 "category": h.get("category", ""),
             }
-        results.append({"job": job_dict, "score": float(h.get("score", 0))})
+        results.append({"job": job_dict, "score": float(h.get("score", 0)), "_hit": h})
     return results
+
+
+def _enrich_hybrid_explanation(
+    results: list[dict],
+    extracted_skills: set[str],
+    db: Session,
+) -> list[dict]:
+    """Add explanation to hybrid recommendations for UI explainability."""
+    extracted_lower = {_normalize(s) for s in extracted_skills if s}
+    by_cat = {c["category"]: c for c in build_by_category(db, extracted_skills)}
+
+    out = []
+    for r in results:
+        rec = {"job": r["job"], "score": r["score"]}
+        hit = r.get("_hit", {})
+        job = rec["job"]
+        job_skills_raw = (job.get("skills_required") or []) + (job.get("skills_nice_to_have") or [])
+        job_skills_norm = {_normalize(s): s for s in job_skills_raw if s}
+        matched = [s for s in job_skills_raw if s and _normalize(s) in extracted_lower]
+        missing = [s for s in job_skills_raw if s and _normalize(s) not in extracted_lower]
+        cat = (job.get("category") or "").strip()
+        cat_overlap = by_cat.get(cat, {})
+        sources = hit.get("sources") or {}
+        if sources.get("keyword") and sources.get("semantic"):
+            retrieval_reason = "hybrid_match"
+        elif sources.get("keyword"):
+            retrieval_reason = "keyword_match"
+        elif sources.get("semantic"):
+            retrieval_reason = "semantic_match"
+        else:
+            retrieval_reason = "match"
+        rec["explanation"] = {
+            "retrieval_reason": retrieval_reason,
+            "sources": sources,
+            "matched_skills": matched,
+            "missing_skills": missing,
+            "category_overlap": {
+                "category": cat,
+                "match_score": cat_overlap.get("match_score", 0),
+            },
+            "keyword_rank": hit.get("keyword_rank"),
+            "semantic_rank": hit.get("semantic_rank"),
+            "summary": f"Matched {len(matched)} resume skills" if matched else "No direct skill match",
+        }
+        out.append(rec)
+    return out
 
 
 def _active_embedding_context(db: Session, ai_config: dict | None = None) -> dict:
@@ -289,6 +335,7 @@ def retrieve_semantic_matches(
         query_text,
         model=resolved.get("embed_model") or embed_model,
         ai_config=resolved.get("embed_ai_config"),
+        usage="query",
     )
     if not embedding:
         return []
@@ -391,6 +438,14 @@ def retrieve_hybrid_recommendations_response(
     )
 
     if status != "ok":
+        if status == "reindex_required":
+            return {
+                "status": status,
+                "message": resolved.get("message"),
+                "recommendations": [],
+                "active_run": active_run_meta,
+                "config_matches_active": bool(resolved.get("config_matches_active")),
+            }
         fallback_hits = _keyword_fallback_hits(
             query_text=query_text,
             top_k=top_k,
@@ -416,6 +471,7 @@ def retrieve_hybrid_recommendations_response(
         query_text,
         model=resolved.get("embed_model") or embed_model,
         ai_config=resolved.get("embed_ai_config"),
+        usage="query",
     )
     if not embedding:
         log.warning("Resume recommendations: query embedding failed for active index %s", active_index_name)
@@ -511,7 +567,8 @@ def retrieve_hybrid_recommendations_response(
                 "config_matches_active": bool(resolved.get("config_matches_active")),
             }
 
-    results = _hydrate_hits_to_jobs(db, hits)
+    raw = _hydrate_hits_to_jobs(db, hits)
+    results = _enrich_hybrid_explanation(raw, extracted_skills, db)
     log.info("Resume recommendations: hits=%d, kept=%d", len(hits), len(results))
     return {
         "status": "ok",

@@ -135,7 +135,10 @@ def test_ai_put_config_resolves_ollama_embed_dims_from_model(client: TestClient)
 
 def test_ai_put_config_best_effort_activates_self_hosted_models(client: TestClient):
     """Saving self-hosted config aligns active models when the runtime supports it."""
-    with patch("app.services.ai_config_service._best_effort_activate_self_hosted_models") as activate:
+    with (
+        patch("app.services.ai_config_service._best_effort_activate_self_hosted_models") as activate,
+        patch("app.services.ai_config_service.is_self_hosted_model_ready", return_value=False),
+    ):
         r = client.put(
             "/api/v1/ai/config",
             json={

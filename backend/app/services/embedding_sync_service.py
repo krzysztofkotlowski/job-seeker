@@ -14,6 +14,7 @@ from app.database import SessionLocal
 from app.models.tables import EmbeddingSyncRunRow, JobRow
 from app.services.ai_config_service import (
     get_ai_config,
+    get_ollama_embedding_dims,
     resolve_ollama_embed_dims,
     update_ai_config,
 )
@@ -67,7 +68,9 @@ def _effective_embed_settings(ai_cfg: dict[str, Any]) -> tuple[str, str, int, st
             resolve_selected_embed_profile(source, OPENAI_EMBED_MODEL, ai_cfg.get("embed_profile")),
         )
     model = str(ai_cfg.get("embed_model") or "").strip() or "nomic-embed-text"
-    dims = resolve_ollama_embed_dims(model, int(ai_cfg.get("embed_dims") or 0) or 768)
+    configured = int(ai_cfg.get("embed_dims") or 0) or 768
+    runtime_dims = get_ollama_embedding_dims(model)
+    dims = int(runtime_dims) if isinstance(runtime_dims, int) and 256 <= runtime_dims <= 4096 else resolve_ollama_embed_dims(model, configured)
     return source, model, dims, resolve_selected_embed_profile(source, model, ai_cfg.get("embed_profile"))
 
 

@@ -10,7 +10,16 @@ from app.models.tables import AIConfigRow
 
 log = logging.getLogger(__name__)
 
+# Re-exports for test patching; implementations live in other modules
+from app.services.embedding_service import get_ollama_embedding_dims
+from app.services.self_hosted_runtime_service import (
+    best_effort_activate_self_hosted_models as _best_effort_activate_self_hosted_models,
+    is_self_hosted_model_ready,
+    list_self_hosted_models,
+)
+
 OLLAMA_URL = (os.environ.get("LLM_URL", "") or "").rstrip("/")
+SELF_HOSTED_URL = (os.environ.get("LLM_URL", "") or "").rstrip("/")
 DEFAULT_LLM_MODEL = os.environ.get("LLM_MODEL", "phi3:mini") or "phi3:mini"
 DEFAULT_EMBED_MODEL = os.environ.get("EMBED_MODEL", "nomic-embed-text") or "nomic-embed-text"
 DEFAULT_MAX_TOKENS = int(os.environ.get("LLM_MAX_OUTPUT_TOKENS", "2048") or "2048")
@@ -63,6 +72,7 @@ def get_ai_config(db: Session) -> dict:
             "api_key_set": bool(getattr(row, "openai_api_key", None) and str(row.openai_api_key).strip()),
             "llm_model": row.llm_model or DEFAULT_LLM_MODEL,
             "embed_model": row.embed_model or DEFAULT_EMBED_MODEL,
+            "embed_profile": getattr(row, "embed_profile", None),
             "temperature": float(row.temperature) if row.temperature is not None else 0.3,
             "max_output_tokens": row.max_output_tokens or DEFAULT_MAX_TOKENS,
             "embed_dims": embed_dims,
@@ -75,6 +85,7 @@ def get_ai_config(db: Session) -> dict:
         "api_key_set": False,
         "llm_model": DEFAULT_LLM_MODEL,
         "embed_model": DEFAULT_EMBED_MODEL,
+        "embed_profile": None,
         "temperature": 0.3,
         "max_output_tokens": DEFAULT_MAX_TOKENS,
         "embed_dims": OLLAMA_EMBED_DIMS,
@@ -91,12 +102,15 @@ def update_ai_config(
     embed_source: str | None = None,
     llm_model: str | None = None,
     embed_model: str | None = None,
+    embed_profile: str | None = None,
     temperature: float | None = None,
     max_output_tokens: int | None = None,
     embed_dims: int | None = None,
 ) -> dict:
     """Update AI config in DB. Returns updated config (without api_key)."""
     row = db.query(AIConfigRow).filter(AIConfigRow.id == 1).first()
+    old_llm = row.llm_model if row else None
+    old_embed = row.embed_model if row else None
     if not row:
         row = AIConfigRow(
             id=1,
@@ -128,6 +142,8 @@ def update_ai_config(
         row.llm_model = llm_model.strip() or DEFAULT_LLM_MODEL
     if embed_model is not None:
         row.embed_model = embed_model.strip() or DEFAULT_EMBED_MODEL
+    if embed_profile is not None:
+        row.embed_profile = embed_profile.strip() or None
     if temperature is not None:
         row.temperature = max(0.0, min(1.0, float(temperature)))
     if max_output_tokens is not None:
@@ -135,9 +151,35 @@ def update_ai_config(
     if embed_dims is not None:
         row.embed_dims = max(256, min(4096, int(embed_dims)))
 
+    # Resolve embed_dims from Ollama model when embed_source is ollama and embed_model provided
+    if (
+        row.embed_source == "ollama"
+        and row.embed_model
+        and (embed_model is not None or embed_source is not None)
+    ):
+        resolved = get_ollama_embedding_dims(row.embed_model)
+        if isinstance(resolved, int) and 256 <= resolved <= 4096:
+            row.embed_dims = resolved
+
     db.commit()
     db.refresh(row)
-    return get_ai_config(db)
+    updated = get_ai_config(db)
+
+    # Best-effort activate self-hosted models when saving ollama config
+    if row.provider == "ollama":
+        # Skip activation when models unchanged and already ready
+        if not (
+            row.llm_model == old_llm
+            and row.embed_model == old_embed
+            and is_self_hosted_model_ready(row.llm_model)
+            and is_self_hosted_model_ready(row.embed_model)
+        ):
+            _best_effort_activate_self_hosted_models(
+                chat_model=row.llm_model,
+                embed_model=row.embed_model,
+            )
+
+    return updated
 
 
 def validate_openai_key(api_key: str) -> bool:
@@ -158,7 +200,15 @@ def validate_openai_key(api_key: str) -> bool:
 
 
 def list_ollama_models() -> dict:
-    """Fetch available models from Ollama /api/tags. Returns { models: [...] }."""
+    """Fetch available models from self-hosted catalog when available, else Ollama /api/tags."""
+    try:
+        result = list_self_hosted_models()
+        if result and "runtime" in result:
+            return result
+        if result and result.get("models"):
+            return result
+    except Exception as e:
+        log.debug("list_self_hosted_models failed, falling back to Ollama: %s", e)
     if not OLLAMA_URL:
         return {"models": []}
     try:

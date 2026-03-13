@@ -93,6 +93,7 @@ async def health():
         status["elasticsearch_available"] = es_available()
     except ImportError:
         status["elasticsearch_available"] = False
+    ai_cfg = None
     try:
         db = SessionLocal()
         try:
@@ -110,6 +111,34 @@ async def health():
             db.close()
     except Exception:
         status["llm_available"] = False
+
+    try:
+        if ai_cfg is None:
+            db = SessionLocal()
+            try:
+                ai_cfg = get_ai_config(db)
+            finally:
+                db.close()
+        if ai_cfg:
+            if ai_cfg.get("embed_source") == "openai":
+                status["embedding_available"] = bool(ai_cfg.get("api_key_set"))
+            else:
+                from app.services.embedding_service import is_ollama_model_ready
+                embed_model = ai_cfg.get("embed_model") or "nomic-embed-text"
+                status["embedding_available"] = is_ollama_model_ready(embed_model)
+    except Exception:
+        status["embedding_available"] = False
+
+    try:
+        from app.services.self_hosted_runtime_service import get_self_hosted_runtime_status
+        cfg = ai_cfg or {}
+        status["self_hosted"] = get_self_hosted_runtime_status(
+            selected_chat_model=cfg.get("llm_model"),
+            selected_embedding_model=cfg.get("embed_model"),
+        )
+    except Exception:
+        status["self_hosted"] = {}
+
     return status
 
 
