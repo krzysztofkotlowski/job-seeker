@@ -463,11 +463,13 @@ export const api = {
     const decoder = new TextDecoder();
     let full = "";
     let recommendations: ResumeRecommendation[] = [];
+    let buffer = "";
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
-      const text = decoder.decode(value, { stream: true });
-      const lines = text.split("\n");
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
       for (const line of lines) {
         if (line.startsWith("data: ")) {
           try {
@@ -491,6 +493,26 @@ export const api = {
             // ignore parse errors
           }
         }
+      }
+    }
+    if (buffer.startsWith("data: ")) {
+      try {
+        const parsed = JSON.parse(buffer.slice(6)) as {
+          chunk?: string;
+          error?: string;
+          done?: boolean;
+          recommendations?: ResumeRecommendation[];
+        };
+        if (parsed.error) throw new Error(parsed.error);
+        if (typeof parsed.chunk === "string") {
+          full += parsed.chunk;
+          onChunk(parsed.chunk);
+        }
+        if (parsed.done && Array.isArray(parsed.recommendations)) {
+          recommendations = parsed.recommendations;
+        }
+      } catch {
+        // ignore
       }
     }
     return { summary: full, recommendations };

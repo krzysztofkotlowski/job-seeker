@@ -14,6 +14,7 @@ import Box from "@mui/material/Box";
 import Paper from "@mui/material/Paper";
 import { useTheme, useMediaQuery } from "@mui/material";
 import { ChartTooltip } from "../components/ChartTooltip";
+import Collapse from "@mui/material/Collapse";
 import Fade from "@mui/material/Fade";
 import Grow from "@mui/material/Grow";
 import Typography from "@mui/material/Typography";
@@ -412,6 +413,21 @@ function normalizeScore(score: number, min: number, max: number): number {
   return Math.round(((score - min) / (max - min)) * 100);
 }
 
+function retrievalReasonLabel(
+  reason: "hybrid_match" | "semantic_match" | "keyword_match",
+): string {
+  switch (reason) {
+    case "hybrid_match":
+      return "Hybrid";
+    case "semantic_match":
+      return "Semantic";
+    case "keyword_match":
+      return "Keyword";
+    default:
+      return "Match";
+  }
+}
+
 const RecommendationCard = memo(function RecommendationCard({
   rec,
   relevancePercent,
@@ -419,11 +435,13 @@ const RecommendationCard = memo(function RecommendationCard({
   rec: ResumeRecommendation;
   relevancePercent: number;
 }) {
+  const [detailsExpanded, setDetailsExpanded] = useState(false);
   const j = rec.job;
   const title = j?.title ?? "Job";
   const company = j?.company ?? "";
   const url = (j?.url ?? "").trim();
   const category = j?.category ?? "";
+  const exp = rec.explanation;
 
   return (
     <Paper
@@ -433,9 +451,8 @@ const RecommendationCard = memo(function RecommendationCard({
         px: 2,
         py: 1.5,
         display: "flex",
-        alignItems: "center",
-        justifyContent: "space-between",
-        gap: 1.5,
+        flexDirection: "column",
+        gap: 1,
         transition: "box-shadow 0.2s ease",
         "&:hover": { boxShadow: 1 },
       }}
@@ -444,65 +461,130 @@ const RecommendationCard = memo(function RecommendationCard({
         sx={{
           display: "flex",
           alignItems: "center",
+          justifyContent: "space-between",
           gap: 1.5,
-          flex: 1,
-          minWidth: 0,
         }}
       >
-        <Box sx={{ flex: 1, minWidth: 0 }}>
-          <Typography variant="subtitle2" fontWeight={600} noWrap>
-            {title}
-          </Typography>
-          {company && (
-            <Typography variant="body2" color="text.secondary" noWrap>
-              {company}
+        <Box
+          sx={{
+            display: "flex",
+            alignItems: "center",
+            gap: 1.5,
+            flex: 1,
+            minWidth: 0,
+          }}
+        >
+          <Box sx={{ flex: 1, minWidth: 0 }}>
+            <Typography variant="subtitle2" fontWeight={600} noWrap>
+              {title}
             </Typography>
+            {company && (
+              <Typography variant="body2" color="text.secondary" noWrap>
+                {company}
+              </Typography>
+            )}
+          </Box>
+          {category && (
+            <Chip
+              label={category}
+              size="small"
+              variant="outlined"
+              sx={{ flexShrink: 0 }}
+            />
+          )}
+          {exp?.retrieval_reason && (
+            <Chip
+              label={retrievalReasonLabel(exp.retrieval_reason)}
+              size="small"
+              variant="outlined"
+              color="primary"
+              sx={{ flexShrink: 0 }}
+            />
+          )}
+          {exp?.matched_skills && exp.matched_skills.length > 0 && (
+            <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap" }}>
+              {exp.matched_skills.slice(0, 5).map((s) => (
+                <Chip key={s} label={s} size="small" sx={{ flexShrink: 0 }} />
+              ))}
+            </Box>
           )}
         </Box>
-        {category && (
+        <Box
+          sx={{
+            flexShrink: 0,
+            display: "flex",
+            alignItems: "center",
+            gap: 1,
+          }}
+        >
           <Chip
-            label={category}
+            label={`${relevancePercent}%`}
             size="small"
-            variant="outlined"
-            sx={{ flexShrink: 0 }}
+            color="primary"
+            variant="filled"
+            sx={{ fontWeight: 600, fontSize: "0.75rem" }}
           />
-        )}
+          {url && url.startsWith("http") && (
+            <a
+              href={url}
+              target="_blank"
+              rel="noopener noreferrer"
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                gap: 4,
+                color: "var(--mui-palette-primary-main)",
+                textDecoration: "none",
+                fontSize: "0.8125rem",
+                whiteSpace: "nowrap",
+              }}
+            >
+              <OpenInNewIcon sx={{ fontSize: 16 }} />
+              Open
+            </a>
+          )}
+          {exp && (
+            <Button
+              size="small"
+              onClick={() => setDetailsExpanded((prev) => !prev)}
+              sx={{ textTransform: "none", minWidth: 0 }}
+            >
+              Why this matched
+            </Button>
+          )}
+        </Box>
       </Box>
-      <Box
-        sx={{
-          flexShrink: 0,
-          display: "flex",
-          alignItems: "center",
-          gap: 1,
-        }}
-      >
-        <Chip
-          label={`${relevancePercent}%`}
-          size="small"
-          color="primary"
-          variant="filled"
-          sx={{ fontWeight: 600, fontSize: "0.75rem" }}
-        />
-        {url && url.startsWith("http") && (
-          <a
-            href={url}
-            target="_blank"
-            rel="noopener noreferrer"
-            style={{
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 4,
-              color: "var(--mui-palette-primary-main)",
-              textDecoration: "none",
-              fontSize: "0.8125rem",
-              whiteSpace: "nowrap",
-            }}
-          >
-            <OpenInNewIcon sx={{ fontSize: 16 }} />
-            Open
-          </a>
+      {exp?.summary && (
+        <Typography variant="body2" color="text.secondary">
+          {exp.summary}
+        </Typography>
+      )}
+      <Collapse in={detailsExpanded}>
+        {exp && (
+          <Box data-testid="recommendation-details" sx={{ pt: 1 }}>
+            {exp.missing_skills && exp.missing_skills.length > 0 && (
+              <>
+                <Typography variant="body2" fontWeight={600} sx={{ mb: 0.5 }}>
+                  Missing skills to strengthen this match
+                </Typography>
+                <Box sx={{ display: "flex", gap: 0.5, flexWrap: "wrap", mb: 1 }}>
+                  {exp.missing_skills.map((s) => (
+                    <Chip key={s} label={s} size="small" variant="outlined" />
+                  ))}
+                </Box>
+              </>
+            )}
+            {exp.keyword_rank != null &&
+              exp.semantic_rank != null &&
+              (exp.sources?.keyword || exp.sources?.semantic) && (
+                <Typography variant="caption" color="text.secondary">
+                  Search signals: keyword #{exp.keyword_rank} · semantic #
+                  {exp.semantic_rank}
+                </Typography>
+              )}
+          </Box>
         )}
-      </Box>
+      </Collapse>
     </Paper>
   );
 });

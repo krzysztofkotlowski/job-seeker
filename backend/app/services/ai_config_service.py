@@ -26,6 +26,26 @@ OPENAI_LLM_MODELS = [
 ]
 OPENAI_EMBED_MODEL = "text-embedding-3-small"
 
+# Known self-hosted embedding model dimensions
+_EMBED_DIMS_BY_MODEL: dict[str, int] = {
+    "nomic-embed-text": 768,
+    "all-minilm": 384,
+    "all-minilm-l6-v2": 384,
+    "bge-base-en": 768,
+    "bge-base-en:v1.5": 768,
+}
+
+
+def resolve_ollama_embed_dims(model: str, configured_dims: int = 0) -> int:
+    """Resolve embedding dimensions for a self-hosted model. Uses configured_dims if valid, else model lookup."""
+    if configured_dims and 256 <= configured_dims <= 4096:
+        return configured_dims
+    m = (model or "").strip().lower()
+    for key, dims in _EMBED_DIMS_BY_MODEL.items():
+        if key in m:
+            return dims
+    return OLLAMA_EMBED_DIMS
+
 
 def get_ai_config(db: Session) -> dict:
     """Return current AI config from DB or env defaults. Never returns api_key."""

@@ -9,13 +9,13 @@ from sqlalchemy.orm import Session
 from app.auth import require_auth
 from app.database import get_db
 from app.services.ai_config_service import (
-    ensure_ollama_model,
     get_ai_config,
     list_ollama_models,
     list_openai_models,
     update_ai_config,
     validate_openai_key,
 )
+from app.services.self_hosted_runtime_service import ensure_self_hosted_model
 from app.services.inference_log_service import get_metrics
 
 router = APIRouter()
@@ -72,8 +72,7 @@ def ensure_model(
     user: Annotated[dict | None, Depends(require_auth)] = None,
 ):
     """Ensure a self-hosted model is available; pull if missing. Returns { status, error? }."""
-    result = ensure_ollama_model(body.model)
-    return result
+    return ensure_self_hosted_model(body.model)
 
 
 @router.post("/config/validate-key")

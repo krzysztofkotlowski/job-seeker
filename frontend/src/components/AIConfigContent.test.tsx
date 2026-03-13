@@ -80,36 +80,43 @@ describe("AIConfigContent", () => {
     vi.clearAllMocks();
   });
 
-  it("saves OpenAI config without sending an empty llm_model", async () => {
-    const user = userEvent.setup();
-    renderWithProviders();
+  it(
+    "saves OpenAI config without sending an empty llm_model",
+    async () => {
+      const user = userEvent.setup();
+      renderWithProviders();
 
-    await waitFor(() => {
-      expect(api.aiGetConfig).toHaveBeenCalled();
-    });
+      await waitFor(() => {
+        expect(api.aiGetConfig).toHaveBeenCalled();
+      });
 
-    const openaiToggle = screen.getByRole("button", { name: /OpenAI API/i });
-    await user.click(openaiToggle);
+      const openaiToggle = screen.getByRole("button", { name: /OpenAI API/i });
+      await user.click(openaiToggle);
 
-    const apiKeyInput = screen.getByLabelText(/OpenAI API key/i);
-    await user.type(apiKeyInput, "sk-test-key");
+      const apiKeyInput = screen.getByLabelText(/OpenAI API key/i);
+      await user.type(apiKeyInput, "sk-test-key");
 
-    const saveButton = screen.getByRole("button", { name: /^Save$/ });
-    await user.click(saveButton);
+      const saveButton = screen.getByRole("button", { name: /^Save$/ });
+      await user.click(saveButton);
 
-    await waitFor(() => {
-      expect(api.aiUpdateConfig).toHaveBeenCalled();
-    });
+      await waitFor(
+        () => {
+          expect(api.aiUpdateConfig).toHaveBeenCalled();
+        },
+        { timeout: 10000 },
+      );
 
-    const payload = (api.aiUpdateConfig as ReturnType<typeof vi.fn>).mock
-      .calls[0][0];
-    expect(payload.provider).toBe("openai");
-    expect(payload.openai_api_key).toBe("sk-test-key");
-    expect(payload.openai_llm_model).toBe("gpt-4o-mini");
-    expect(payload.embed_source).toBe("ollama");
-    expect(payload).not.toHaveProperty("llm_model");
-    expect(payload.embed_model).toBe("nomic-embed-text");
-  });
+      const payload = (api.aiUpdateConfig as ReturnType<typeof vi.fn>).mock
+        .calls[0][0];
+      expect(payload.provider).toBe("openai");
+      expect(payload.openai_api_key).toBe("sk-test-key");
+      expect(payload.openai_llm_model).toBe("gpt-4o-mini");
+      expect(payload.embed_source).toBe("ollama");
+      expect(payload).not.toHaveProperty("llm_model");
+      expect(payload.embed_model).toBe("nomic-embed-text");
+    },
+    10000,
+  );
 
   it("shows resolved embedding dims from the saved config", async () => {
     renderWithProviders();

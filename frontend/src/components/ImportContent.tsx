@@ -600,6 +600,19 @@ export function ImportContent() {
           </Alert>
         )}
         {embeddingStatus?.available &&
+          currentRun?.status === "failed" &&
+          currentRun?.error_message && (
+            <Alert severity="error" sx={{ mb: 2 }}>
+              {currentRun.error_message}
+            </Alert>
+          )}
+        {embeddingStatus?.available &&
+          embeddingStatus?.recommendations?.message && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              {embeddingStatus.recommendations.message}
+            </Alert>
+          )}
+        {embeddingStatus?.available &&
           embeddingStatus?.reindex_required &&
           !isEmbeddingRunActive && (
             <Alert severity="warning" sx={{ mb: 2 }}>
@@ -610,7 +623,8 @@ export function ImportContent() {
           )}
         {embeddingStatus?.available &&
           activeRun &&
-          !embeddingStatus?.current_config_matches_active && (
+          !embeddingStatus?.current_config_matches_active &&
+          currentRun?.status !== "failed" && (
             <Alert severity="info" sx={{ mb: 2 }}>
               Recommendations are currently using an older active index built
               with {activeRun.embed_model} ({activeRun.embed_dims} dims). They
