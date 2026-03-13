@@ -75,6 +75,7 @@ The dashboard gives an overview of the indexed dataset and import status:
 <p align="center">
   <img src="assets/job-seeker-dashboard.gif" alt="Dashboard" width="100%" />
 </p>
+<p align="center"><sub><a href="assets/job-seeker-dashboard.mp4">Full quality: mp4</a></sub></p>
 
 From a portfolio perspective, this is not a UI-only app or an isolated AI demo. It shows full ownership of product delivery across ingestion, async pipelines, search infrastructure, AI integration, production deployment, and frontend UX.
 
@@ -98,6 +99,7 @@ From a portfolio perspective, this is not a UI-only app or an isolated AI demo. 
 <p align="center">
   <img src="assets/job-seeker-resume-view.gif" alt="Resume analysis" width="100%" />
 </p>
+<p align="center"><sub><a href="assets/job-seeker-resume-view.mp4">Full quality: mp4</a></sub></p>
 
 - Generate hybrid recommendations from the active semantic index
 - Produce AI summaries and career guidance with thin-llama or OpenAI
@@ -106,6 +108,7 @@ From a portfolio perspective, this is not a UI-only app or an isolated AI demo. 
 <p align="center">
   <img src="assets/job-seeker-settings.gif" alt="AI settings" width="100%" />
 </p>
+<p align="center"><sub><a href="assets/job-seeker-settings.mp4">Full quality: mp4</a></sub></p>
 
 - Run persistent embedding sync with tracked progress and active-index cutover
 - Explore skills, salary trends, and dashboard analytics:
