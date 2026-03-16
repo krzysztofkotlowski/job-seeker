@@ -8,7 +8,7 @@ from fastapi import APIRouter, HTTPException, Query, Depends
 from sqlalchemy import func
 from sqlalchemy.orm import Session
 
-from app.celery_app import run_embedding_sync
+from app.celery_app import run_embedding_sync, run_enrichment
 from app.database import get_db
 from app.errors import api_error
 from app.services import jobs_service
@@ -127,6 +127,34 @@ def list_seniorities(db: Session = Depends(get_db)):
 def list_top_skills(top: int = Query(50, ge=1, le=200), db: Session = Depends(get_db)):
     """Return top N skill names for autocomplete."""
     return jobs_service.list_top_skills(db, top)
+
+
+@router.get("/missing-descriptions")
+def missing_descriptions(
+    limit: int = Query(10, ge=0, le=100, description="Max sample IDs to return (0=none)"),
+    db: Session = Depends(get_db),
+):
+    """Return count and sample IDs of jobs with empty description (for analysis before enrich)."""
+    from app.parsers.detector import is_supported_url
+
+    empty_desc = (JobRow.description.is_(None)) | (func.trim(func.coalesce(JobRow.description, "")) == "")
+    q = db.query(JobRow).filter(empty_desc)
+    total = q.count()
+    by_source = (
+        db.query(JobRow.source, func.count(JobRow.id))
+        .filter(empty_desc)
+        .group_by(JobRow.source)
+        .all()
+    )
+    sample_ids = []
+    if limit > 0 and total > 0:
+        rows = q.limit(limit).all()
+        sample_ids = [str(r.id) for r in rows if is_supported_url(r.url)]
+    return {
+        "total": total,
+        "by_source": {s: c for s, c in by_source},
+        "sample_ids": sample_ids,
+    }
 
 
 @router.get("/analytics")
@@ -369,17 +397,40 @@ def fix_categories(db: Session = Depends(get_db)):
 @router.post("/enrich")
 def enrich_jobs_batch(
     ids: Optional[str] = Query(None, description="Comma-separated job UUIDs to enrich"),
+    missing_description: bool = Query(False, description="If true, enrich all jobs with empty description (runs in background)"),
+    limit: int = Query(2000, ge=1, le=50000, description="Max jobs when missing_description=true"),
+    delay_sec: float = Query(0.5, ge=0, le=5, description="Delay between requests when missing_description=true"),
     db: Session = Depends(get_db),
 ):
-    """Enrich jobs missing description or skills_nice_to_have by re-parsing their URLs."""
-    if not ids:
-        raise api_error("MISSING_IDS", "Provide ids query param (comma-separated UUIDs)", status_code=400)
-    job_ids = [i.strip() for i in ids.split(",") if i.strip()]
-    if not job_ids:
-        raise api_error("MISSING_IDS", "Provide at least one job ID", status_code=400)
+    """Enrich jobs missing description or skills_nice_to_have by re-parsing their URLs.
+    When missing_description=true, runs in background; use GET /enrich/status to track progress."""
+    if missing_description:
+        from app.services.enrichment_service import (
+            EnrichmentAlreadyRunningError,
+            attach_celery_task_id,
+            queue_enrichment_run,
+            serialize_run,
+        )
+        try:
+            row = queue_enrichment_run(db, limit=limit, delay_sec=delay_sec)
+        except EnrichmentAlreadyRunningError as e:
+            raise api_error("ENRICHMENT_IN_PROGRESS", str(e), status_code=409)
+        if row.total == 0:
+            return {"run_id": str(row.id), "status": "completed", "total": 0, "enriched": 0, "message": "No jobs to enrich"}
+        task = run_enrichment.delay(str(row.id), delay_sec=delay_sec)
+        row = attach_celery_task_id(db, str(row.id), getattr(task, "id", None)) or row
+        return serialize_run(row)
 
     from app.parsers.detector import detect_and_parse, is_supported_url
     from app.services.skill_detector import run_detection_batch
+
+    if ids:
+        job_ids = [i.strip() for i in ids.split(",") if i.strip()]
+    else:
+        raise api_error("MISSING_IDS", "Provide ids query param or missing_description=true", status_code=400)
+
+    if not job_ids:
+        return {"enriched": 0, "errors": [], "message": "No jobs to enrich"}
 
     enriched = 0
     enriched_ids: list = []
@@ -414,6 +465,20 @@ def enrich_jobs_batch(
     if enriched > 0:
         run_detection_batch(db, job_ids=enriched_ids)
     return {"enriched": enriched, "errors": errors[:20]}
+
+
+@router.get("/enrich/status")
+def enrich_status(
+    run_id: Optional[str] = Query(None, description="Run ID to query; if omitted, returns latest run"),
+    db: Session = Depends(get_db),
+):
+    """Track progress of a background enrichment run."""
+    from app.services.enrichment_service import get_run, get_latest_run, serialize_run
+    if run_id:
+        row = get_run(db, run_id)
+    else:
+        row = get_latest_run(db)
+    return serialize_run(row) or {"run": None, "message": "No enrichment run found"}
 
 
 @router.post("/{job_id}/enrich")

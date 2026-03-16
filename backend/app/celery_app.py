@@ -6,6 +6,7 @@ from celery import Celery
 
 from app.import_engine import SOURCES, _prepare_source, _run_justjoin, _run_nofluffjobs
 from app.services.embedding_sync_service import run_sync_task
+from app.services.enrichment_service import run_enrichment_task
 
 
 def _make_celery() -> Celery:
@@ -47,3 +48,9 @@ def run_import_all() -> None:
 def run_embedding_sync(run_id: str) -> None:
   """Run a persistent embedding sync task in the worker process."""
   run_sync_task(run_id)
+
+
+@celery_app.task(name="enrichment.run")
+def run_enrichment(run_id: str, delay_sec: float = 0.5) -> None:
+  """Run background enrichment of jobs with missing descriptions."""
+  run_enrichment_task(run_id, delay_sec=delay_sec)

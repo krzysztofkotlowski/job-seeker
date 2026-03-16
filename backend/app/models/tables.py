@@ -228,3 +228,25 @@ class EmbeddingSyncRunRow(Base):
     __table_args__ = (
         Index("idx_embedding_sync_runs_status_updated_at", "status", "updated_at"),
     )
+
+
+class EnrichmentRunRow(Base):
+    """Persistent enrichment run for jobs with missing descriptions."""
+
+    __tablename__ = "enrichment_runs"
+
+    id = Column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
+    status = Column(String(20), nullable=False, default="queued", index=True)
+    total = Column(Integer, nullable=False, default=0)
+    enriched = Column(Integer, nullable=False, default=0)
+    errors_count = Column(Integer, nullable=False, default=0)
+    error_log = Column(ARRAY(Text), default=list)
+    pending_job_ids = Column(ARRAY(Text), default=list)
+    celery_task_id = Column(String(255), nullable=True)
+    started_at = Column(DateTime(timezone=True), nullable=True)
+    finished_at = Column(DateTime(timezone=True), nullable=True)
+    updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc), nullable=False)
+
+    __table_args__ = (
+        Index("idx_enrichment_runs_status_updated_at", "status", "updated_at"),
+    )

@@ -147,6 +147,26 @@ docker compose -f deploy/docker-compose.prod.yml up -d --build
 docker compose -f deploy/docker-compose.prod.yml run --rm thin-llama-init
 ```
 
+## Enriching jobs with missing descriptions
+
+Some imported jobs may have empty descriptions (e.g. when the listing API omits them). You can backfill descriptions by re-parsing the job URLs. Enrichment runs in the background via Celery.
+
+```bash
+# 1. Check how many jobs need enrichment (replace HOST with server URL)
+curl -s "http://HOST/api/v1/jobs/missing-descriptions?limit=5"
+
+# 2. Start background enrichment (returns immediately with run_id)
+curl -X POST "http://HOST/api/v1/jobs/enrich?missing_description=true&limit=5000&delay_sec=0.5"
+
+# 3. Track progress (use run_id from step 2, or omit for latest run)
+curl -s "http://HOST/api/v1/jobs/enrich/status?run_id=YOUR_RUN_ID"
+curl -s "http://HOST/api/v1/jobs/enrich/status"
+
+# 4. When status is "completed", run step 2 again if more jobs need enrichment
+```
+
+If you use Keycloak auth, add `-H "Authorization: Bearer YOUR_TOKEN"` to the curl commands.
+
 ## Hardware notes
 
 The stack is tuned for a machine with ~16GB RAM and 6 CPUs (e.g. HP EliteDesk G4):

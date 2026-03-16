@@ -57,10 +57,14 @@ def on_startup():
         run_migrations(engine)
         from app.import_engine import recover_interrupted_imports
         from app.services.embedding_sync_service import recover_interrupted_runs
+        from app.services.enrichment_service import recover_interrupted_runs as recover_enrichment_runs
         recover_interrupted_imports()
         interrupted = recover_interrupted_runs()
         if interrupted:
             log.info("Marked %d interrupted embedding sync run(s) after startup", interrupted)
+        enrichment_interrupted = recover_enrichment_runs()
+        if enrichment_interrupted:
+            log.info("Marked %d interrupted enrichment run(s) after startup", enrichment_interrupted)
         log.info("Startup complete")
     except Exception as e:
         log.exception("Startup failed (DB or migrations): %s", e)

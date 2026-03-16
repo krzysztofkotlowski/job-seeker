@@ -471,6 +471,88 @@ def test_enrich_batch_missing_ids(client: TestClient):
     assert body["error"]["code"] == "MISSING_IDS"
 
 
+def test_missing_descriptions(client: TestClient):
+    """GET /missing-descriptions returns count and by_source for jobs with empty description."""
+    r = client.get("/api/v1/jobs/missing-descriptions")
+    assert r.status_code == 200
+    data = r.json()
+    assert "total" in data
+    assert "by_source" in data
+    assert "sample_ids" in data
+    assert isinstance(data["total"], int)
+    assert isinstance(data["by_source"], dict)
+    assert isinstance(data["sample_ids"], list)
+
+
+def test_enrich_batch_missing_description(client: TestClient):
+    """POST /enrich?missing_description=true enriches all jobs in background (runs eagerly in tests)."""
+    payload = {
+        "url": "https://justjoin.it/job-offer/test-batch-enrich",
+        "source": "justjoin.it",
+        "title": "Dev",
+        "company": "Corp",
+        "location": [],
+        "salary": None,
+        "skills_required": [],
+        "skills_nice_to_have": [],
+        "seniority": "Mid",
+        "work_type": "Remote",
+        "employment_types": [],
+        "description": "",
+        "category": "Backend",
+        "date_published": None,
+        "date_expires": None,
+    }
+    r = client.post("/api/v1/jobs", json=payload)
+    assert r.status_code == 201, r.text
+
+    mock_parsed = JobBase(
+        url=payload["url"],
+        source="justjoin.it",
+        title=payload["title"],
+        company=payload["company"],
+        location=[],
+        salary=None,
+        skills_required=["Python"],
+        skills_nice_to_have=["Docker"],
+        seniority="Mid",
+        work_type="Remote",
+        employment_types=[],
+        description="Full job description here.",
+        category="Backend",
+        date_published=None,
+        date_expires=None,
+    )
+
+    with patch("app.parsers.detector.detect_and_parse", return_value=mock_parsed):
+        r_enrich = client.post(
+            "/api/v1/jobs/enrich",
+            params={"missing_description": "true", "limit": 10, "delay_sec": 0},
+        )
+    assert r_enrich.status_code == 200, r_enrich.text
+    data = r_enrich.json()
+    assert "id" in data
+    assert data["status"] in ("queued", "running", "completed")
+    assert data["total"] >= 1
+    assert data["enriched"] >= 1
+    assert "errors" in data
+
+    r_status = client.get("/api/v1/jobs/enrich/status", params={"run_id": data["id"]})
+    assert r_status.status_code == 200
+    status_data = r_status.json()
+    assert status_data["id"] == data["id"]
+    assert status_data["status"] == "completed"
+    assert status_data["enriched"] >= 1
+
+
+def test_enrich_status_without_run_id(client: TestClient):
+    """GET /enrich/status returns latest run when run_id omitted."""
+    r = client.get("/api/v1/jobs/enrich/status")
+    assert r.status_code == 200
+    data = r.json()
+    assert "run" in data or "id" in data
+
+
 def test_list_categories(client: TestClient):
     """List categories returns array (may be empty)."""
     r = client.get("/api/v1/jobs/categories")
