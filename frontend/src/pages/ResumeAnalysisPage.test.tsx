@@ -801,6 +801,112 @@ describe("ResumeAnalysisPage", () => {
     );
   });
 
+  it("shows fallback notice when recommendations return status fallback", async () => {
+    vi.mocked(api.embeddingStatus).mockResolvedValue({
+      available: true,
+      current_db_total: 100,
+      run: null,
+      active_run: {
+        id: "run-1",
+        status: "completed",
+        mode: "full",
+        unique_only: true,
+        embed_source: "ollama",
+        embed_model: "nomic-embed-text",
+        embed_dims: 768,
+        db_total_snapshot: 100,
+        selection_total: 50,
+        target_total: 50,
+        processed: 50,
+        indexed: 50,
+        failed: 0,
+        index_alias: "jobseeker_jobs_active",
+        physical_index_name: "jobseeker_jobs_run_1",
+        celery_task_id: "celery-1",
+        error_message: null,
+        started_at: null,
+        finished_at: null,
+        updated_at: null,
+        activated_at: "2026-03-10T19:53:28Z",
+      },
+      active_index_name: "jobseeker_jobs_active",
+      active_indexed_documents: 50,
+      current_config_matches_active: true,
+      reindex_required: false,
+      legacy_indices: [],
+    });
+    vi.mocked(api.resumeAnalyze).mockResolvedValue({
+      extracted_skills: ["Python", "Docker"],
+      match_count: 0,
+      matches: [],
+      by_category: [],
+    });
+    vi.mocked(api.resumeRecommendations).mockResolvedValue({
+      status: "fallback",
+      message: "Embedding query failed; using keyword fallback",
+      recommendations: [
+        {
+          job: {
+            id: "job-1",
+            title: "Python Developer",
+            company: "Acme",
+            url: "https://example.com/job-1",
+            category: "Backend",
+          },
+          score: 0.8,
+        },
+      ],
+    });
+
+    renderWithRouter(<ResumeAnalysisPage />);
+    await waitFor(() => expect(api.listCategories).toHaveBeenCalled());
+
+    const user = userEvent.setup();
+    const file = new File(["fake pdf content"], "resume.pdf", {
+      type: "application/pdf",
+    });
+    const input = document.getElementById("resume-upload") as HTMLInputElement;
+    await user.upload(input, file);
+
+    await waitFor(() => expect(api.resumeRecommendations).toHaveBeenCalled());
+    expect(
+      await screen.findByText(/Embedding query failed; using keyword fallback/i),
+    ).toBeInTheDocument();
+  });
+
+  it("shows info Alert when analyze returns message for semantic-only skills", async () => {
+    vi.mocked(api.resumeAnalyze).mockResolvedValue({
+      extracted_skills: ["Python", "FastAPI", "PostgreSQL"],
+      match_count: 0,
+      matches: [],
+      by_category: [],
+      message:
+        "Skills extracted from PDF (no direct match in our job database). Using for recommendations and additional matching.",
+    });
+
+    renderWithRouter(<ResumeAnalysisPage />);
+    await waitFor(() => expect(api.listCategories).toHaveBeenCalled());
+
+    const user = userEvent.setup();
+    const file = new File(["fake pdf content"], "resume.pdf", {
+      type: "application/pdf",
+    });
+    const input = document.getElementById("resume-upload") as HTMLInputElement;
+    await user.upload(input, file);
+
+    await waitFor(() => expect(api.resumeAnalyze).toHaveBeenCalled());
+    expect(
+      await screen.findByText(
+        /Skills extracted from PDF \(no direct match in our job database\)\. Using for recommendations and additional matching\./i,
+      ),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(
+        /Skills extracted from your PDF \(used for recommendations and additional matching\)\./i,
+      ),
+    ).toBeInTheDocument();
+  });
+
   it("does not show RAG indexing guidance when the resume produced no extracted skills", async () => {
     vi.mocked(api.resumeAnalyze).mockResolvedValue({
       extracted_skills: [],

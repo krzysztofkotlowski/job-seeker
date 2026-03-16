@@ -241,6 +241,129 @@ def test_get_ollama_embedding_dims_falls_back_to_probe_when_catalog_metadata_mis
     embed_text.assert_called_once()
 
 
+def test_embed_text_cache_hit():
+    """Second call with same input uses cache, does not call HTTP."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.return_value = {"embeddings": [[0.1] * 768]}
+
+    with (
+        patch.object(embedding_service, "EMBED_URL", "http://ollama:11434"),
+        patch.object(embedding_service, "httpx") as mock_httpx,
+    ):
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.post.return_value = mock_resp
+        mock_httpx.Client.return_value = mock_client
+
+        # Clear cache to ensure fresh state
+        embedding_service._embed_cache.clear()
+        embedding_service._embed_cache_keys.clear()
+
+        result1 = embedding_service.embed_text(
+            "python backend",
+            model="nomic-embed-text",
+            ai_config={"embed_source": "ollama", "embed_profile": "nomic-search-v1"},
+            usage="query",
+        )
+        result2 = embedding_service.embed_text(
+            "python backend",
+            model="nomic-embed-text",
+            ai_config={"embed_source": "ollama", "embed_profile": "nomic-search-v1"},
+            usage="query",
+        )
+
+    assert result1 is not None
+    assert result2 is not None
+    assert result1 == result2
+    # HTTP should be called only once (second call uses cache)
+    assert mock_client.post.call_count == 1
+
+
+def test_embed_text_cache_separates_profiles():
+    """Different embed profiles must not reuse the same cached query vector."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.side_effect = [
+        {"embeddings": [[0.1] * 768]},
+        {"embeddings": [[0.2] * 768]},
+    ]
+
+    with (
+        patch.object(embedding_service, "EMBED_URL", "http://ollama:11434"),
+        patch.object(embedding_service, "httpx") as mock_httpx,
+    ):
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.post.return_value = mock_resp
+        mock_httpx.Client.return_value = mock_client
+
+        embedding_service._embed_cache.clear()
+        embedding_service._embed_cache_keys.clear()
+
+        result1 = embedding_service.embed_text(
+            "python backend",
+            model="nomic-embed-text",
+            ai_config={"embed_source": "ollama", "embed_profile": "raw-v1"},
+            usage="query",
+        )
+        result2 = embedding_service.embed_text(
+            "python backend",
+            model="nomic-embed-text",
+            ai_config={"embed_source": "ollama", "embed_profile": "nomic-search-v1"},
+            usage="query",
+        )
+
+    assert result1 == [0.1] * 768
+    assert result2 == [0.2] * 768
+    assert mock_client.post.call_count == 2
+
+
+def test_embed_text_does_not_cache_document_embeddings():
+    """Document embeddings should not be served from the query cache."""
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.raise_for_status = MagicMock()
+    mock_resp.json.side_effect = [
+        {"embeddings": [[0.1] * 768]},
+        {"embeddings": [[0.2] * 768]},
+    ]
+
+    with (
+        patch.object(embedding_service, "EMBED_URL", "http://ollama:11434"),
+        patch.object(embedding_service, "httpx") as mock_httpx,
+    ):
+        mock_client = MagicMock()
+        mock_client.__enter__ = MagicMock(return_value=mock_client)
+        mock_client.__exit__ = MagicMock(return_value=False)
+        mock_client.post.return_value = mock_resp
+        mock_httpx.Client.return_value = mock_client
+
+        embedding_service._embed_cache.clear()
+        embedding_service._embed_cache_keys.clear()
+
+        result1 = embedding_service.embed_text(
+            "python backend",
+            model="nomic-embed-text",
+            ai_config={"embed_source": "ollama", "embed_profile": "nomic-search-v1"},
+            usage="document",
+        )
+        result2 = embedding_service.embed_text(
+            "python backend",
+            model="nomic-embed-text",
+            ai_config={"embed_source": "ollama", "embed_profile": "nomic-search-v1"},
+            usage="document",
+        )
+
+    assert result1 == [0.1] * 768
+    assert result2 == [0.2] * 768
+    assert mock_client.post.call_count == 2
+
+
 def test_embed_documents_individually_retries_failed_items():
     with patch.object(
         embedding_service,

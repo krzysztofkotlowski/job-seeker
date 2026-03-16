@@ -1,5 +1,6 @@
 """Resume analysis service: match jobs and build by-category stats."""
 
+import asyncio
 import logging
 import os
 from collections import defaultdict
@@ -13,6 +14,9 @@ from app.models.tables import JobRow
 log = logging.getLogger(__name__)
 
 RAG_ENABLED = os.environ.get("RAG_ENABLED", "false").lower() in ("1", "true", "yes")
+RERANK_ENABLED = os.environ.get("RERANK_ENABLED", "true").lower() in ("1", "true", "yes")
+RERANK_CANDIDATES = int(os.environ.get("RERANK_CANDIDATES", "30") or "30")
+QUERY_EXPANSION_ENABLED = os.environ.get("QUERY_EXPANSION_ENABLED", "false").lower() in ("1", "true", "yes")
 
 DEFAULT_MATCH_LIMIT = 100
 
@@ -390,7 +394,7 @@ def retrieve_hybrid_recommendations_response(
     """
     try:
         from app.services.embedding_service import embed_text
-        from app.services.elasticsearch_service import is_available, search_hybrid
+        from app.services.elasticsearch_service import is_available, search_hybrid, _merge_rrf_multi
     except ImportError:
         log.warning("Resume recommendations: RAG modules not available")
         return {
@@ -419,6 +423,19 @@ def retrieve_hybrid_recommendations_response(
             "active_run": None,
             "config_matches_active": False,
         }
+
+    # Query expansion: generate 2-3 variants for richer retrieval
+    queries = [query_text]
+    if QUERY_EXPANSION_ENABLED and ai_config:
+        try:
+            from app.services.query_expansion_service import expand_query_llm
+
+            expanded = asyncio.run(expand_query_llm(extracted_skills, ai_config=ai_config, max_variants=3))
+            if len(expanded) > 1:
+                queries = expanded
+                log.info("Query expansion: %d variants", len(queries))
+        except Exception as e:
+            log.debug("Query expansion skipped: %s", e)
 
     resolved = _active_embedding_context(db, ai_config=ai_config)
     active_run = resolved.get("active_run")
@@ -467,16 +484,33 @@ def retrieve_hybrid_recommendations_response(
             "config_matches_active": bool(resolved.get("config_matches_active")),
         }
 
-    embedding = embed_text(
-        query_text,
-        model=resolved.get("embed_model") or embed_model,
-        ai_config=resolved.get("embed_ai_config"),
-        usage="query",
-    )
-    if not embedding:
+    expected_dims = int(active_run.embed_dims or 0)
+    fetch_k = RERANK_CANDIDATES if RERANK_ENABLED else top_k
+    all_hits: list[list[dict]] = []
+    primary_query = queries[0]
+    for q in queries:
+        embedding = embed_text(
+            q,
+            model=resolved.get("embed_model") or embed_model,
+            ai_config=resolved.get("embed_ai_config"),
+            usage="query",
+        )
+        if not embedding or len(embedding) != expected_dims:
+            continue
+        q_hits = search_hybrid(
+            query_text=q,
+            query_embedding=embedding,
+            top_k=fetch_k,
+            embed_dims=expected_dims,
+            index_name=active_index_name,
+        )
+        if q_hits:
+            all_hits.append(q_hits)
+
+    if not all_hits:
         log.warning("Resume recommendations: query embedding failed for active index %s", active_index_name)
         fallback_hits = _keyword_fallback_hits(
-            query_text=query_text,
+            query_text=primary_query,
             top_k=top_k,
             index_name=active_index_name,
         )
@@ -496,44 +530,19 @@ def retrieve_hybrid_recommendations_response(
             "config_matches_active": bool(resolved.get("config_matches_active")),
         }
 
-    expected_dims = int(active_run.embed_dims or 0)
-    if len(embedding) != expected_dims:
-        log.warning(
-            "Resume recommendations: active run dims mismatch (run_id=%s, expected=%d, query=%d, index=%s, config_matches_active=%s)",
-            active_run.id,
-            expected_dims,
-            len(embedding),
-            active_index_name,
-            resolved.get("config_matches_active"),
-        )
-        fallback_hits = _keyword_fallback_hits(
-            query_text=query_text,
-            top_k=top_k,
-            index_name=active_index_name,
-        )
-        if fallback_hits:
-            return {
-                "status": "fallback",
-                "message": "Active embedding dimensions do not match the query model; using keyword fallback on the active index.",
-                "recommendations": _hydrate_hits_to_jobs(db, fallback_hits),
-                "active_run": active_run_meta,
-                "config_matches_active": bool(resolved.get("config_matches_active")),
-            }
-        return {
-            "status": "reindex_required",
-            "message": "The active recommendation index uses a different embedding shape. Run a full rebuild.",
-            "recommendations": [],
-            "active_run": active_run_meta,
-            "config_matches_active": bool(resolved.get("config_matches_active")),
-        }
+    if len(all_hits) > 1:
+        hits = _merge_rrf_multi(all_hits)[:fetch_k]
+    else:
+        hits = all_hits[0]
+    if RERANK_ENABLED and hits:
+        try:
+            from app.services.reranker_service import rerank_hits
 
-    hits = search_hybrid(
-        query_text=query_text,
-        query_embedding=embedding,
-        top_k=top_k,
-        embed_dims=expected_dims,
-        index_name=active_index_name,
-    )
+            hits = rerank_hits(primary_query, hits, top_k=top_k)
+        except Exception as e:
+            log.debug("Reranking skipped: %s", e)
+    elif hits:
+        hits = hits[:top_k]
     if not hits:
         fallback_hits = _keyword_fallback_hits(
             query_text=query_text,

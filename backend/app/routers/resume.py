@@ -12,7 +12,7 @@ from sqlalchemy.orm import Session
 
 from app.auth import get_current_user_optional, require_auth
 from app.database import get_db
-from app.models.resume import ResumeSummarizeRequest
+from app.models.resume import ResumeRecommendationsRequest, ResumeSummarizeRequest
 from app.services.ai_config_service import get_ai_config
 from app.services.inference_log_service import log_inference
 from app.services.user_service import get_or_create_user
@@ -22,11 +22,13 @@ from app.services.llm_service import (
     summarize_resume_match,
     summarize_resume_match_stream,
 )
-from app.services.resume_keywords import extract_keywords_from_pdf
+from app.services.resume_keywords import extract_keywords_from_text, extract_text_from_pdf
+from app.services.resume_llm_extraction import extract_skills_from_text_llm
 from app.services.resume_service import (
     build_by_category,
     match_jobs_to_skills,
     merge_keyword_and_semantic_matches,
+    retrieve_hybrid_recommendations_response,
     retrieve_semantic_matches,
     RAG_ENABLED,
 )
@@ -89,18 +91,40 @@ async def analyze_resume(
             raise HTTPException(400, "Only PDF files are supported.")
 
         try:
-            known_skills = _get_known_skills(db)
-            keywords = extract_keywords_from_pdf(content, known_skills=known_skills)
+            text = extract_text_from_pdf(content)
         except ValueError as e:
             raise HTTPException(400, str(e))
         except Exception as e:
             log.exception("PDF extraction failed")
             raise HTTPException(400, f"PDF could not be read: {e!s}")
 
-        # Keep only skills that exist in our system (from scraped offers)
+        try:
+            known_skills = _get_known_skills(db)
+            keywords = extract_keywords_from_text(text, known_skills=known_skills)
+        except Exception as e:
+            log.exception("Keyword extraction failed")
+            raise HTTPException(400, f"Could not extract keywords: {e!s}") from e
+
+        # LLM extraction (optional, merges with rule-based)
+        try:
+            ai_cfg = get_ai_config(db)
+            llm_skills = await extract_skills_from_text_llm(text, ai_config=ai_cfg)
+            if llm_skills:
+                keywords = keywords | llm_skills
+        except Exception as e:
+            log.debug("LLM skill extraction skipped: %s", e)
+
         keywords_lower = {_normalize(k) for k in keywords if k}
         known_lower_to_canonical = {_normalize(s): s for s in known_skills if s}
-        extracted_skills = {known_lower_to_canonical[k] for k in keywords_lower if k in known_lower_to_canonical}
+        known_matches = {known_lower_to_canonical[k] for k in keywords_lower if k in known_lower_to_canonical}
+
+        # Use known matches when available; else fall back to raw tokens for RAG/display
+        if known_matches:
+            extracted_skills = known_matches
+        else:
+            # Fallback: use raw tokens (cap at 50) when no known skills match
+            raw_tokens = sorted(keywords - {""})[:50]
+            extracted_skills = {t for t in raw_tokens if t and len(t) >= 2}
 
         if not extracted_skills:
             return {
@@ -111,16 +135,19 @@ async def analyze_resume(
                 "message": "No skills from the PDF matched our system (skills from scraped offers).",
             }
 
-        keyword_matches = match_jobs_to_skills(db, extracted_skills)
-        by_category = build_by_category(db, extracted_skills)
+        # For keyword match and by_category we need known skills; use extracted when known_matches exist
+        skills_for_match = known_matches if known_matches else extracted_skills
 
-        # RAG: merge semantic matches when enabled
+        keyword_matches = match_jobs_to_skills(db, skills_for_match)
+        by_category = build_by_category(db, skills_for_match)
+
+        # RAG: merge semantic matches when enabled (use full extracted_skills for richer query)
         if RAG_ENABLED:
             ai_cfg = get_ai_config(db)
             embed_model = ai_cfg["embed_model"] if ai_cfg.get("embed_source") != "openai" else None
             semantic_matches = retrieve_semantic_matches(
                 db,
-                extracted_skills,
+                extracted_skills,  # full set for semantic search
                 top_k=10,
                 embed_model=embed_model,
                 ai_config=ai_cfg,
@@ -148,17 +175,43 @@ async def analyze_resume(
             db.add(resume)
             db.commit()
 
+        message = None
+        if not known_matches and extracted_skills:
+            message = (
+                "Skills extracted from PDF (no direct match in our job database). "
+                "Using for recommendations and additional matching."
+            )
+
         return {
             "extracted_skills": sorted(extracted_skills),
             "match_count": len(matches),
             "matches": matches,
             "by_category": by_category,
+            "message": message,
         }
     except HTTPException:
         raise
     except Exception as e:
         log.exception("Resume analyze failed")
         raise HTTPException(500, f"Resume analysis failed: {e!s}")
+
+
+@router.post("/recommendations")
+def resume_recommendations(
+    body: ResumeRecommendationsRequest = Body(...),
+    db: Session = Depends(get_db),
+):
+    """
+    Fetch hybrid search (keyword + semantic) job recommendations for extracted skills.
+    Used by the frontend after resume analyze when RAG is enabled.
+    """
+    extracted = set((body.extracted_skills or [])[:200])  # cap for safety
+    return retrieve_hybrid_recommendations_response(
+        db,
+        extracted,
+        top_k=10,
+        ai_config=get_ai_config(db),
+    )
 
 
 @router.post("/summarize")

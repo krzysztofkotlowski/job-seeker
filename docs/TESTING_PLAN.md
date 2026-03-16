@@ -111,7 +111,7 @@ npm run test
 - [x] Backend: test for resume with auth + persistence
 - [x] Backend: test for imports status/start
 - [x] Frontend: add DashboardPage test
-- [ ] Frontend: add SkillsPage test (optional)
+- [x] Frontend: add SkillsPage test (optional)
 - [x] Pipeline script: `scripts/test-and-build.sh`
 - [x] Testing plan: `docs/TESTING_PLAN.md`
 

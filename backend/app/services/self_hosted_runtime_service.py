@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import time
 from dataclasses import dataclass
 
 import httpx
@@ -113,6 +114,7 @@ class ThinLlamaRuntimeClient(SelfHostedRuntimeClient):
                 "role": item.get("role"),
                 "status": status,
                 "embedding_dims": _coerce_positive_int(item.get("embedding_dims")),
+                "download_status": str(item.get("download_status") or "").strip() or "missing",
             }
             details = {
                 "status": status,
@@ -145,26 +147,83 @@ class ThinLlamaRuntimeClient(SelfHostedRuntimeClient):
         }
 
     def ensure_model(self, model: str) -> dict:
+        requested = _normalize_model_name(model)
+        if not requested:
+            return {"status": "error", "error": "Model name is required"}
+
+        # Try sync pull first (fast for small models or already-present)
         try:
             resp = self._request(
                 "POST",
                 "/api/pull",
-                json={"model": model, "stream": False},
-                timeout=300,
+                json={"model": requested, "stream": False},
+                timeout=60,
             )
-            if resp.status_code != 200:
+            if resp.status_code == 200:
+                data = resp.json()
+                status = str(data.get("status") or "").strip().lower()
+                pull_state = str(data.get("pull_state") or status or "").strip().lower()
+                if status == "success" or pull_state in {"success", "downloaded", "already-present"}:
+                    return {"status": "ok"}
+                return {"status": "error", "error": pull_state or status or "Pull failed"}
+            if resp.status_code == 202:
+                return self._poll_model_download(requested)
+            if resp.status_code != 202:
                 return {"status": "error", "error": resp.text or f"HTTP {resp.status_code}"}
-            data = resp.json()
-            status = str(data.get("status") or "").strip().lower()
-            pull_state = str(data.get("pull_state") or status or "").strip().lower()
-            if status == "success" or pull_state in {"success", "downloaded", "already-present"}:
-                return {"status": "ok"}
-            return {"status": "error", "error": pull_state or status or "Pull failed"}
         except httpx.TimeoutException:
-            return {"status": "error", "error": "Self-hosted runtime request timed out"}
+            return self._ensure_model_async(requested)
         except Exception as e:
             log.debug("thin-llama ensure-model failed: %s", e)
             return {"status": "error", "error": str(e)}
+
+    def _ensure_model_async(self, requested: str) -> dict:
+        """Start async pull and poll until available or error."""
+        try:
+            resp = self._request(
+                "POST",
+                "/api/pull",
+                json={"model": requested, "stream": True},
+                timeout=10,
+            )
+            if resp.status_code != 200 and resp.status_code != 202:
+                return {"status": "error", "error": resp.text or f"HTTP {resp.status_code}"}
+        except httpx.TimeoutException:
+            return {"status": "error", "error": "Self-hosted runtime request timed out"}
+        except Exception as e:
+            log.debug("thin-llama async pull start failed: %s", e)
+            return {"status": "error", "error": str(e)}
+
+        return self._poll_model_download(requested)
+
+    def _poll_model_download(self, requested: str) -> dict:
+        """Poll thin-llama model status until the requested model is available or fails."""
+        # Poll for completion
+        poll_interval = 10
+        max_wait = 30 * 60  # 30 minutes
+        start = time.monotonic()
+        while (time.monotonic() - start) < max_wait:
+            try:
+                payload = self.list_models()
+                for item in payload.get("models") or []:
+                    name = _normalize_model_name(item.get("name") or item.get("model"))
+                    if not name or not _model_matches(requested, name):
+                        continue
+                    ds = str(item.get("download_status") or "").strip().lower()
+                    if ds in ("available", "downloaded"):
+                        return {"status": "ok"}
+                    if ds == "error":
+                        err = str(item.get("details", {}).get("error") or item.get("download_error") or "Download failed")
+                        return {"status": "error", "error": err}
+                    if ds == "downloading":
+                        break
+                else:
+                    time.sleep(poll_interval)
+                    continue
+            except Exception as e:
+                log.debug("thin-llama poll failed: %s", e)
+            time.sleep(poll_interval)
+
+        return {"status": "error", "error": "Model download timed out after 30 minutes"}
 
     def activate_models(self, *, chat_model: str | None = None, embed_model: str | None = None) -> bool:
         payload: dict[str, str] = {}

@@ -54,8 +54,8 @@ def _match_known_skills_in_text(text: str, known_skills: set[str]) -> set[str]:
     return found
 
 
-def extract_keywords_from_pdf(content: bytes, known_skills: set[str] | None = None) -> set[str]:
-    """Extract keywords from PDF bytes. Uses raw tokens + known skill names found in text."""
+def extract_text_from_pdf(content: bytes) -> str:
+    """Extract raw text from PDF bytes. Raises ValueError on invalid PDF."""
     if not HAS_PDF:
         raise ValueError("PDF support not available. Install pypdf.")
     if not content:
@@ -75,8 +75,19 @@ def extract_keywords_from_pdf(content: bytes, known_skills: set[str] | None = No
                 pass
     except Exception as e:
         raise ValueError(f"Could not read PDF pages: {e!s}") from e
-    text = " ".join(text_parts)
+    return " ".join(text_parts)
+
+
+def extract_keywords_from_text(text: str, known_skills: set[str] | None = None) -> set[str]:
+    """Extract keywords from resume text. Uses raw tokens + known skill names found in text."""
     keywords = _tokenize(text)
     if known_skills:
         keywords |= _match_known_skills_in_text(text, known_skills)
     return keywords
+
+
+def extract_keywords_from_pdf(content: bytes, known_skills: set[str] | None = None) -> set[str]:
+    """Extract keywords from PDF bytes. Uses raw tokens + known skill names found in text.
+    When known_skills is empty or sparse, raw tokens are returned to avoid empty results."""
+    text = extract_text_from_pdf(content)
+    return extract_keywords_from_text(text, known_skills)

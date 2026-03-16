@@ -2,6 +2,8 @@
 
 from unittest.mock import patch
 
+import httpx
+
 from app.services.self_hosted_runtime_service import (
     RuntimeInfo,
     ThinLlamaRuntimeClient,
@@ -102,6 +104,57 @@ def test_thin_llama_ensure_model_accepts_already_present_status():
             200,
             {"status": "success", "pull_state": "already-present"},
         ),
+    ):
+        result = client.ensure_model("all-minilm")
+    assert result == {"status": "ok"}
+
+
+def test_thin_llama_ensure_model_polls_when_sync_pull_returns_accepted():
+    """When sync pull returns 202, poll until the model becomes available."""
+    client = ThinLlamaRuntimeClient("http://thin-llama:8080")
+    poll_responses = [
+        {"models": [{"name": "all-minilm", "model": "all-minilm", "available": False, "download_status": "downloading"}]},
+        {"models": [{"name": "all-minilm", "model": "all-minilm", "available": True, "download_status": "available"}]},
+    ]
+
+    with (
+        patch.object(
+            client,
+            "_request",
+            return_value=DummyResponse(202, {"status": "started", "model": "all-minilm"}),
+        ),
+        patch.object(client, "list_models", side_effect=lambda: poll_responses.pop(0)),
+        patch("app.services.self_hosted_runtime_service.time.sleep"),
+    ):
+        result = client.ensure_model("all-minilm")
+
+    assert result == {"status": "ok"}
+
+
+def test_thin_llama_ensure_model_uses_async_poll_on_sync_timeout():
+    """When sync pull times out, starts async pull and polls until available."""
+    client = ThinLlamaRuntimeClient("http://thin-llama:8080")
+    poll_responses = [
+        {"models": [{"name": "all-minilm", "model": "all-minilm", "available": False, "download_status": "downloading"}]},
+        {"models": [{"name": "all-minilm", "model": "all-minilm", "available": True, "download_status": "available"}]},
+    ]
+
+    def mock_request(method, path, **kwargs):
+        if method == "POST" and path == "/api/pull":
+            if kwargs.get("json", {}).get("stream"):
+                return DummyResponse(202, {"status": "started", "model": "all-minilm"})
+            raise httpx.TimeoutException("sync timed out")
+        return DummyResponse(500, {})
+
+    def mock_list_models():
+        if poll_responses:
+            return poll_responses.pop(0)
+        return {"models": [{"name": "all-minilm", "model": "all-minilm", "available": True, "download_status": "available"}]}
+
+    with (
+        patch.object(client, "_request", side_effect=mock_request),
+        patch.object(client, "list_models", side_effect=mock_list_models),
+        patch("app.services.self_hosted_runtime_service.time.sleep"),
     ):
         result = client.ensure_model("all-minilm")
     assert result == {"status": "ok"}

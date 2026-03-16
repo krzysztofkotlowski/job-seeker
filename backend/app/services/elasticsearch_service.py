@@ -540,7 +540,7 @@ def search_keyword(
                     "fuzziness": "AUTO",
                 }
             },
-            _source=["job_id", "title", "company", "url", "category"],
+            _source=["job_id", "title", "company", "url", "category", "skills_combined", "description"],
             size=top_k,
         )
         hits = resp.get("hits", {}).get("hits", [])
@@ -556,6 +556,8 @@ def search_keyword(
                 "company": src.get("company", ""),
                 "url": src.get("url", ""),
                 "category": src.get("category", ""),
+                "skills_combined": src.get("skills_combined", ""),
+                "description": (src.get("description") or "")[:1000],
                 "score": float(score),
             })
         return out
@@ -636,6 +638,34 @@ def _merge_rrf(
     return out
 
 
+def _merge_rrf_multi(hit_lists: list[list[dict]], k: int = 60) -> list[dict]:
+    """Merge N hit lists using RRF. score = sum(1/(k+rank_i)) for each list."""
+    if not hit_lists:
+        return []
+    if len(hit_lists) == 1:
+        return hit_lists[0]
+    ranks: dict[str, list[int]] = {}
+    docs: dict[str, dict] = {}
+    max_rank = max(len(h) for h in hit_lists) + 1
+    for hits in hit_lists:
+        for i, h in enumerate(hits):
+            jid = str(h.get("job_id")) if h.get("job_id") else None
+            if not jid:
+                continue
+            if jid not in ranks:
+                ranks[jid] = []
+                docs[jid] = h
+            ranks[jid].append(i + 1)
+    scored: list[tuple[float, dict]] = []
+    for jid, r_list in ranks.items():
+        rrf = sum(1.0 / (k + r) for r in r_list)
+        doc = dict(docs[jid])
+        doc["score"] = rrf
+        scored.append((rrf, doc))
+    scored.sort(key=lambda x: -x[0])
+    return [d for _, d in scored]
+
+
 def search_similar(
     query_embedding: list[float],
     top_k: int = 10,
@@ -658,7 +688,7 @@ def search_similar(
                 "k": top_k,
                 "num_candidates": top_k * 2,
             },
-            _source=["job_id", "title", "company", "url", "category"],
+            _source=["job_id", "title", "company", "url", "category", "skills_combined", "description"],
             size=top_k,
         )
         hits = resp.get("hits", {}).get("hits", [])
@@ -674,6 +704,8 @@ def search_similar(
                 "company": src.get("company", ""),
                 "url": src.get("url", ""),
                 "category": src.get("category", ""),
+                "skills_combined": src.get("skills_combined", ""),
+                "description": (src.get("description") or "")[:1000],
                 "score": float(score),
             })
         return out

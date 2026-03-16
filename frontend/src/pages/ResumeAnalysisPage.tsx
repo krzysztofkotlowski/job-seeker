@@ -1050,7 +1050,9 @@ export function ResumeAnalysisPage() {
                       {safe.extracted_skills.length})
                     </Typography>
                     <Typography variant="caption" color="text.secondary">
-                      Skills we matched directly against the jobs database.
+                      {safe.message?.toLowerCase().includes("no direct match")
+                        ? "Skills extracted from your PDF (used for recommendations and additional matching)."
+                        : "Skills we matched directly against the jobs database."}
                     </Typography>
                   </Box>
                   <Chip

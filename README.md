@@ -60,6 +60,12 @@ flowchart LR
 
 `thin-llama` acts as the AI runtime for both chat (resume summaries, career guidance) and embeddings (RAG). It exposes an Ollama-compatible API, so the backend uses the same client for local and hosted providers. Production deployment fetches `thin-llama` from a pinned Git ref on the server.
 
+The backend model bootstrap path now:
+
+- tries a synchronous pull first for small or already-present models
+- falls back to thin-llama async download + polling when the pull times out
+- reads `download_status` from `GET /api/models` while waiting for completion
+
 ---
 
 ## Project Description
@@ -94,7 +100,7 @@ From a portfolio perspective, this is not a UI-only app or an isolated AI demo. 
 
 - Aggregate jobs from JustJoin.it and NoFluffJobs into a unified dataset
 - Filter, group duplicates, inspect details, and track application state
-- Upload a PDF resume and extract skills matched against imported jobs — the app embeds your skills and runs hybrid search (keyword + semantic) over the indexed jobs:
+- Upload a PDF resume, extract text once, combine rule-based skills with optional LLM extraction, and run hybrid search (keyword + semantic) over the indexed jobs:
 
 <p align="center">
   <img src="assets/job-seeker-resume-view.gif" alt="Resume analysis" width="100%" />
@@ -103,6 +109,7 @@ From a portfolio perspective, this is not a UI-only app or an isolated AI demo. 
 
 - Generate hybrid recommendations from the active semantic index
 - Produce AI summaries and career guidance with thin-llama or OpenAI
+- Optionally enrich retrieval with LLM query expansion and local reranking during recommendations
 - Configure LLM and embedding providers from the UI:
 
 <p align="center">
@@ -230,6 +237,7 @@ job-seeker/
 - **Self-hosted vs OpenAI:** thin-llama-first defaults make the project cheap to run, but model quality and latency depend on local hardware. OpenAI can be configured from the same UI for higher quality when needed.
 - **Elasticsearch vector search** keeps retrieval infrastructure explicit and inspectable, at the cost of managing index lifecycle and rebuilds.
 - **Celery + Redis** add operational complexity, but keep imports and embedding sync out of the request path and make long-running jobs reliable.
+- **Resume retrieval flow:** rule-based extraction remains the baseline, LLM extraction is additive, and hybrid recommendations can layer optional query expansion/reranking behind env flags (`QUERY_EXPANSION_ENABLED`, `RERANK_ENABLED`).
 - The product is currently specialized around Polish IT sources, but the ingestion architecture is adapter-based rather than hard-coded to one board.
 
 ---
