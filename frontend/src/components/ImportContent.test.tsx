@@ -260,7 +260,8 @@ describe("ImportContent", () => {
       expect(api.embeddingStatus).toHaveBeenCalled();
     });
 
-    expect(screen.getByRole("checkbox")).toBeChecked();
+    const checkbox = await screen.findByRole("checkbox", {}, { timeout: 3000 });
+    expect(checkbox).toBeChecked();
     expect(api.syncEmbeddings).not.toHaveBeenCalled();
   });
 

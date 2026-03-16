@@ -524,7 +524,7 @@ def test_enrich_batch_missing_description(client: TestClient):
         date_expires=None,
     )
 
-    with patch("app.parsers.detector.detect_and_parse", return_value=mock_parsed):
+    with patch("app.services.enrichment_service.detect_and_parse", return_value=mock_parsed):
         r_enrich = client.post(
             "/api/v1/jobs/enrich",
             params={"missing_description": "true", "limit": 10, "delay_sec": 0},
