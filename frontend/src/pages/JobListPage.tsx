@@ -158,7 +158,7 @@ export function JobListPage() {
     workType: workType || undefined,
     location: location || undefined,
     saved: savedBool,
-    groupDuplicates: !showDuplicates,
+    groupDuplicates: false,
     enabled: readyToFetch,
   });
 

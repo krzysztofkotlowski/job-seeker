@@ -133,7 +133,7 @@ describe("JobListPage", () => {
     expect(await screen.findByText(/New \(1\)/)).toBeInTheDocument();
   });
 
-  it("passes same group_duplicates to listJobs and analytics", async () => {
+  it("passes group_duplicates to listJobs from toggle, analytics always ungrouped", async () => {
     renderWithRouter(<JobListPage />);
 
     await waitFor(() => expect(api.listJobs).toHaveBeenCalled());
@@ -143,7 +143,7 @@ describe("JobListPage", () => {
       expect.objectContaining({ group_duplicates: true }),
     );
     expect(api.analytics).toHaveBeenCalledWith(
-      expect.objectContaining({ group_duplicates: true }),
+      expect.objectContaining({ group_duplicates: false }),
     );
   });
 

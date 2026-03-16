@@ -5,12 +5,6 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 
-class ResumeRecommendationsRequest(BaseModel):
-    """Request body for /resume/recommendations."""
-
-    extracted_skills: list[str] = Field(default_factory=list, description="Skills extracted from resume")
-
-
 class ResumeSummarizeRequest(BaseModel):
     """Request body for /resume/summarize and /resume/summarize/stream."""
 
